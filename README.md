@@ -29,11 +29,18 @@ Flow looks like this:
 - keypair secret is used to generate encryption secret for values in dht
 - first subkey is the group name
 - other subkeys are encrypted with the secret in the format of `encrypted(repoPublicKey)`
-- method for `listRepos() => DataRepo`
-- method for `lstTunnels() => []PublicKey`
+- `constructor(routingContext, keyPair)`
+- `listRepos() => DataRepo`
+- `lstTunnels() => []PublicKey`
 - `getBlob(groupPublicKey, repoPublicKey, fileName) => Result<async iterator bytes[]>`
 - `joinGroup(keyPair) => Result`
 - `listMembers(groupPublicKey) => {name, repooPublicKey}[]`
+- `encrypt([]bytes data) => Result<bytes[]>`
+- `decrypt([]bytes encryptedData) => Result<bytes[]>`
+- `dhtGet(subkey number) => Result<bytes[]>` (decrypts after get)
+- `dhtPut(subkey number, bytes[]) => Result` (encrypts before put)
+- `dhtNumKeys() => Result<number>`
+- `dhtHasRepo(publicKey) => Result<bool>`
 
 ### DataRepo
 
