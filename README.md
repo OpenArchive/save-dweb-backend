@@ -5,6 +5,8 @@ DWeb Backend for the Save app based on Veilid and Iroh
 
 ![graphviz architecture](https://github.com/tripledoublev/save-dweb-backend/assets/631268/ebea73cb-a709-4d86-8bd3-63290cdb9d88)
 
+Source for the above diagram is [here](graphviz_architecture.dot).
+
 ## Plans
 
 We'll make use of Veilid for peer discovery and connections, and for public key cryptography. Iroh will be used for blob replication. We'll make an adapter to iroh's store class based on veilid's protected store.
