@@ -1,6 +1,60 @@
 # save-dweb-backend
 DWeb Backend for the Save app based on Veilid and Iroh
 
+## Architecture
+
+```graphviz
+digraph {
+rankdir=TD
+sync[label="Backups Server\n(Cloud/PC)" shape=house];
+android[label="Android Kotlin" shape=Msquare];
+ios[label="iOS Swift" shape=Msquare];
+daemon[label="DWeb Backend Daemon"];
+syncGroup[label="P2P Sync Group\n(Gossip via app calls)"];
+peer[label="Other peers" shape=Msquare]
+admin[label="Sync Admin\n(admin key pair)" shape=Msquare]
+repo[label="Group Data\n(Veilid DHT Record)" shape=cylinder]
+external[label="Others Data\n(Veilid DHT Record)" shape=folder]
+personal[label="Personal Data Repo\n(Veilid DHT Record)" shape=folder]
+vrpc[label="Veilid app calls"]
+rpc[label="Inter-process RPC/FFI"]
+
+daemon -> syncGroup;
+
+android -> rpc;
+ios -> rpc;
+rpc -> daemon[label="Unix domain socket or FFI"];
+
+peer -> syncGroup [label="Add archives"];
+syncGroup -> peer[label="View, Replicate"];
+
+sync -> syncGroup;
+syncGroup -> sync;
+
+admin -> vrpc[label="View/Remove Groups"];
+
+{
+rank=same;
+daemon -> sync[style=dashed label="Code reuse"]
+}
+
+repo -> external;
+repo -> personal;
+
+daemon -> repo;
+
+ios -> vrpc;
+android -> vrpc;
+vrpc -> sync[label="Veilid Route"];
+
+{
+    rank=same;
+external -> peer[style=dashed];
+}
+
+
+}
+```
 
 ## Plans
 
