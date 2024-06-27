@@ -3,57 +3,47 @@ DWeb Backend for the Save app based on Veilid and Iroh
 
 ## Architecture
 
-```graphviz
-digraph {
-rankdir=TD
-sync[label="Backups Server\n(Cloud/PC)" shape=house];
-android[label="Android Kotlin" shape=Msquare];
-ios[label="iOS Swift" shape=Msquare];
-daemon[label="DWeb Backend Daemon"];
-syncGroup[label="P2P Sync Group\n(Gossip via app calls)"];
-peer[label="Other peers" shape=Msquare]
-admin[label="Sync Admin\n(admin key pair)" shape=Msquare]
-repo[label="Group Data\n(Veilid DHT Record)" shape=cylinder]
-external[label="Others Data\n(Veilid DHT Record)" shape=folder]
-personal[label="Personal Data Repo\n(Veilid DHT Record)" shape=folder]
-vrpc[label="Veilid app calls"]
-rpc[label="Inter-process RPC/FFI"]
+```mermaid
+graph TD
+    sync["Backups Server\n(Cloud/PC)"]
+    android["Android Kotlin"]
+    ios["iOS Swift"]
+    daemon["DWeb Backend Daemon"]
+    syncGroup["P2P Sync Group\n(Gossip via app calls)"]
+    peer["Other peers"]
+    admin["Sync Admin\n(admin key pair)"]
+    repo[("Group Data\n(Veilid DHT Record)")]
+    external["Others Data\n(Veilid DHT Record)"]
+    personal["Personal Data Repo\n(Veilid DHT Record)"]
+    vrpc["Veilid app calls"]
+    rpc["Inter-process RPC/FFI"]
 
-daemon -> syncGroup;
+    daemon --> syncGroup
+    android --> rpc
+    ios --> rpc
+    rpc --> |"Unix domain socket or FFI"| daemon
+    peer --> |"Add archives"| syncGroup
+    syncGroup --> |"View, Replicate"| peer
+    sync <--> syncGroup
+    admin --> |"View/Remove Groups"| vrpc
+    daemon -.-> |"Code reuse"| sync
+    repo --> external
+    repo --> personal
+    daemon --> repo
+    ios --> vrpc
+    android --> vrpc
+    vrpc --> |"Veilid Route"| sync
+    external -.-> peer
 
-android -> rpc;
-ios -> rpc;
-rpc -> daemon[label="Unix domain socket or FFI"];
+    classDef house fill:#f9f,stroke:#333,stroke-width:4px, color: black;
+    classDef msquare fill:#ccf,stroke:#333,stroke-width:2px, color: black;
+    classDef cylinder fill:#fcf,stroke:#333,stroke-width:2px, color: black;
+    classDef folder fill:#ffc,stroke:#333,stroke-width:2px, color: black;
 
-peer -> syncGroup [label="Add archives"];
-syncGroup -> peer[label="View, Replicate"];
-
-sync -> syncGroup;
-syncGroup -> sync;
-
-admin -> vrpc[label="View/Remove Groups"];
-
-{
-rank=same;
-daemon -> sync[style=dashed label="Code reuse"]
-}
-
-repo -> external;
-repo -> personal;
-
-daemon -> repo;
-
-ios -> vrpc;
-android -> vrpc;
-vrpc -> sync[label="Veilid Route"];
-
-{
-    rank=same;
-external -> peer[style=dashed];
-}
-
-
-}
+    class sync house;
+    class android,ios,peer,admin msquare;
+    class repo cylinder;
+    class external,personal folder;
 ```
 
 ## Plans
