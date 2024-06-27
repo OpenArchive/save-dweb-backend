@@ -3,58 +3,9 @@ DWeb Backend for the Save app based on Veilid and Iroh
 
 ## Architecture
 
-```graphviz
-digraph {
-rankdir=TD
-sync[label="Backups Server\n(Cloud/PC)" shape=house];
-android[label="Android Kotlin" shape=Msquare];
-ios[label="iOS Swift" shape=Msquare];
-daemon[label="DWeb Backend Daemon"];
-syncGroup[label="P2P Sync Group\n(Gossip via app calls)"];
-peer[label="Other peers" shape=Msquare]
-admin[label="Sync Admin\n(admin key pair)" shape=Msquare]
-repo[label="Group Data\n(Veilid DHT Record)" shape=cylinder]
-external[label="Others Data\n(Veilid DHT Record)" shape=folder]
-personal[label="Personal Data Repo\n(Veilid DHT Record)" shape=folder]
-vrpc[label="Veilid app calls"]
-rpc[label="Inter-process RPC/FFI"]
+![graphviz architecture](https://github.com/tripledoublev/save-dweb-backend/assets/631268/ebea73cb-a709-4d86-8bd3-63290cdb9d88)
 
-daemon -> syncGroup;
-
-android -> rpc;
-ios -> rpc;
-rpc -> daemon[label="Unix domain socket or FFI"];
-
-peer -> syncGroup [label="Add archives"];
-syncGroup -> peer[label="View, Replicate"];
-
-sync -> syncGroup;
-syncGroup -> sync;
-
-admin -> vrpc[label="View/Remove Groups"];
-
-{
-rank=same;
-daemon -> sync[style=dashed label="Code reuse"]
-}
-
-repo -> external;
-repo -> personal;
-
-daemon -> repo;
-
-ios -> vrpc;
-android -> vrpc;
-vrpc -> sync[label="Veilid Route"];
-
-{
-    rank=same;
-external -> peer[style=dashed];
-}
-
-
-}
-```
+Source for the above diagram is [here](graphviz_architecture.dot).
 
 ## Plans
 
