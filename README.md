@@ -3,48 +3,7 @@ DWeb Backend for the Save app based on Veilid and Iroh
 
 ## Architecture
 
-```mermaid
-graph TD
-    sync["Backups Server\n(Cloud/PC)"]
-    android["Android Kotlin"]
-    ios["iOS Swift"]
-    daemon["DWeb Backend Daemon"]
-    syncGroup["P2P Sync Group\n(Gossip via app calls)"]
-    peer["Other peers"]
-    admin["Sync Admin\n(admin key pair)"]
-    repo[("Group Data\n(Veilid DHT Record)")]
-    external["Others Data\n(Veilid DHT Record)"]
-    personal["Personal Data Repo\n(Veilid DHT Record)"]
-    vrpc["Veilid app calls"]
-    rpc["Inter-process RPC/FFI"]
-
-    daemon --> syncGroup
-    android --> rpc
-    ios --> rpc
-    rpc --> |"Unix domain socket or FFI"| daemon
-    peer --> |"Add archives"| syncGroup
-    syncGroup --> |"View, Replicate"| peer
-    sync <--> syncGroup
-    admin --> |"View/Remove Groups"| vrpc
-    daemon -.-> |"Code reuse"| sync
-    repo --> external
-    repo --> personal
-    daemon --> repo
-    ios --> vrpc
-    android --> vrpc
-    vrpc --> |"Veilid Route"| sync
-    external -.-> peer
-
-    classDef house fill:#f9f,stroke:#333,stroke-width:4px, color: black;
-    classDef msquare fill:#ccf,stroke:#333,stroke-width:2px, color: black;
-    classDef cylinder fill:#fcf,stroke:#333,stroke-width:2px, color: black;
-    classDef folder fill:#ffc,stroke:#333,stroke-width:2px, color: black;
-
-    class sync house;
-    class android,ios,peer,admin msquare;
-    class repo cylinder;
-    class external,personal folder;
-```
+![graphviz architecture](https://github.com/tripledoublev/save-dweb-backend/assets/631268/ebea73cb-a709-4d86-8bd3-63290cdb9d88)
 
 ## Plans
 
