@@ -1,6 +1,12 @@
 # save-dweb-backend
 DWeb Backend for the Save app based on Veilid and Iroh
 
+## Running
+
+- Run tests with `cargo test`
+- After changing, format with `cargo fmt` and lint with `cargo clippy`
+- You can run the backend as a process with `cargo run`
+
 ## Architecture
 
 ![graphviz architecture](https://github.com/tripledoublev/save-dweb-backend/assets/631268/ebea73cb-a709-4d86-8bd3-63290cdb9d88)
@@ -73,6 +79,11 @@ Flow looks like this:
 ## Radmap:
 
 - get veilid building and running inside backend class
+    - Pass storage location in the constructor
+    - Add veilid instance as property of backend struct (in a box?)
+    - Tie veilid to the lifetime of the backend
+    - Stop veilid node in stop method
+    - For the test find a way to make the storage ephemeral, e.g. make a path in `/tmp`, maybe use a utility
 - create groups and publish to veilid with name, read name from keypair
 - create data repo with name and advertise to dht/read name back
 - add own repo to group, list known repos, get their names
@@ -84,4 +95,3 @@ Flow looks like this:
 - standardize on URI scheme for linking to groups
 - exend uri scheme for also adding data repo keypair for migrating devices
 - "backup server" listening for rpc to start replicating groups
-
