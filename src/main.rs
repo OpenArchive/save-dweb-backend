@@ -127,3 +127,18 @@ async fn main() -> eyre::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn basic_test() {
+    let path = "./tmp/test_dweb_backend";
+    let port = 8080;
+
+    // Ensure the directory exists before creating the store
+    fs::create_dir_all(path).await.expect("Failed to create base directory");
+
+    let mut d_web_backend = DWebBackend::new(path, port);
+
+    // Start the backend and wait for SIGINT signal.
+    d_web_backend.start().await.expect("Unable to start");
+    d_web_backend.stop().await.expect("Unable to stop");
+}
