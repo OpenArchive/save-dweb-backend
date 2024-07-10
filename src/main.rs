@@ -80,15 +80,15 @@ struct DWebBackend {
 }
 
 impl DWebBackend {
-    pub fn new(base_path: &str, port: u16) -> Self {
+    pub fn new(base_path: &str, port: u16) -> Result<Self> {
         let store_path = format!("{}/store.db", base_path);
-        let store = Store::persistent(&store_path).expect("Failed to create persistent store");
-        DWebBackend {
+        let store = Store::persistent(&store_path).map_err(|e| anyhow!("Failed to create persistent store: {}", e))?;
+        Ok(DWebBackend {
             path: base_path.to_string(),
             port,
             store,
             veilid_api: None,
-        }
+        })
     }
 
     // Updated start method to initialize both Store and Veilid
