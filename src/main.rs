@@ -2,6 +2,13 @@ use async_stream::stream;
 use futures_core::stream::Stream;
 use iroh::docs::{store::fs::Store, NamespaceId, NamespaceSecret, Replica};
 use std::io::Result;
+use veilid_core::{VeilidAPI, VeilidUpdate, VeilidConfigInner, api_startup_config};
+use std::sync::Arc;
+use tokio::fs;
+use tracing::info;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+
 
 pub struct Group<'a> {
     id: NamespaceId,
