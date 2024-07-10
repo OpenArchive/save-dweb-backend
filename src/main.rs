@@ -1,6 +1,7 @@
 use async_stream::stream;
 use futures_core::stream::Stream;
 use std::io::Result;
+use iroh::docs::{store::fs::Store, NamespaceId, NamespaceSecret, Replica};
 use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config};
 use std::sync::Arc;
 use tokio::fs;
