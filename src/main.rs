@@ -108,11 +108,14 @@ impl DWebBackend {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let path = "/api";
+async fn main() -> eyre::Result<()> {
+    let path = "./tmp/save_dweb_backend"; // Changed to use a relative temporary directory
     let port = 8080;
 
-    let mut d_web_backend = DWebBackend::new(&path, port);
+    // Ensure the directory exists before creating the store
+    fs::create_dir_all(path).await.expect("Failed to create base directory");
+
+    let mut d_web_backend = DWebBackend::new(path, port);
 
     // Start the backend and wait for SIGINT signal.
     d_web_backend.start().await?;
