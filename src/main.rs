@@ -115,6 +115,7 @@ impl DWebBackend {
             namespace: "openarchive".into(), 
             capabilities: Default::default(),
             protected_store: veilid_core::VeilidConfigProtectedStore {
+                // avoid prompting for password, don't do this in production
                 allow_insecure_fallback: true,
                 always_use_insecure_storage: true,
                 directory: format!("{}/protected_store_{}", base_dir, random_suffix),
