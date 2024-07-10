@@ -1,7 +1,7 @@
 use async_stream::stream;
 use futures_core::stream::Stream;
 use std::io::Result;
-use iroh::docs::{store::fs::Store, NamespaceId, NamespaceSecret, Replica};
+use iroh::docs::{store::fs::Store};
 use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config};
 use std::sync::Arc;
 use tokio::fs;
@@ -26,7 +26,7 @@ impl DataRepo {
     }
     async fn get_file_stream(&self, file_name: &str) -> Result<impl Stream<Item = Vec<u8>>> {
         let s = stream! {
-            let mut vec: Vec<u8> = Vec::new();
+            let vec: Vec<u8> = Vec::new();
             yield vec;
         };
 
