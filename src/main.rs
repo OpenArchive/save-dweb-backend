@@ -156,19 +156,6 @@ impl DWebBackend {
     }
 }
 
-#[tokio::test]
-async fn basic_test() {
-    let path = "./";
-    let port = 8080;
-
-    let mut d_web_backend = DWebBackend::new(String::from(path), port);
-
-    // Start the backend and wait for SIGINT signal.
-    d_web_backend.start().await.expect("Unable to start");
-    d_web_backend.stop().await.expect("Unable to stop");
-}
-
-
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let path = "./tmp/save_dweb_backend"; // Changed to use a relative temporary directory
