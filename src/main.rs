@@ -111,8 +111,8 @@ impl DWebBackend {
 
         // Create a VeilidConfigInner instance
         let config_inner = VeilidConfigInner {
-            program_name: format!("node{}", random_suffix),
-            namespace: format!("default_{}", random_suffix),
+            program_name: format!("save-dweb-backend-{}", random_suffix),
+            namespace: "openarchive".into(), 
             capabilities: Default::default(),
             protected_store: veilid_core::VeilidConfigProtectedStore {
                 allow_insecure_fallback: true,
