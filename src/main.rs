@@ -1,13 +1,13 @@
 use async_stream::stream;
 use futures_core::stream::Stream;
-use std::io::Result;
-use iroh::docs::{store::fs::Store};
+use iroh::docs::store::fs::Store;
 use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config};
 use std::sync::Arc;
 use tokio::fs;
 use tracing::info;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use eyre::{Result, anyhow};
 
 pub struct DataRepo {}
 
@@ -92,13 +92,13 @@ impl DWebBackend {
     }
 
     // Updated start method to initialize both Store and Veilid
-    pub async fn start(&mut self) -> eyre::Result<()> {
+    pub async fn start(&mut self) -> Result<()> {
         println!("Starting on {} with port {}", self.path, self.port);
 
         // Ensure base directory exists
         let base_dir = &self.path;
         fs::create_dir_all(base_dir).await.map_err(|e| {
-            eyre::eyre!("Failed to create base directory {}: {}", base_dir, e)
+            anyhow!("Failed to create base directory {}: {}", base_dir, e)
         })?;
 
         // Initialize Veilid
@@ -135,13 +135,13 @@ impl DWebBackend {
         };
 
         self.veilid_api = Some(api_startup_config(update_callback, config_inner).await.map_err(|e| {
-            eyre::eyre!("Failed to initialize Veilid API: {}", e)
+            anyhow!("Failed to initialize Veilid API: {}", e)
         })?);
 
         Ok(())
     }
 
-    pub async fn stop(&self) -> eyre::Result<()> {
+    pub async fn stop(&self) -> Result<()> {
         println!("Stopping DWebBackend...");
         if let Some(veilid) = &self.veilid_api {
             veilid.clone().shutdown().await;
@@ -158,14 +158,14 @@ impl DWebBackend {
 }
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     let path = "./tmp/save_dweb_backend"; // Changed to use a relative temporary directory
     let port = 8080;
 
     // Ensure the directory exists before creating the store
     fs::create_dir_all(path).await.expect("Failed to create base directory");
 
-    let mut d_web_backend = DWebBackend::new(path, port);
+    let mut d_web_backend = DWebBackend::new(path, port)?;
 
     // Start the backend and wait for SIGINT signal.
     d_web_backend.start().await?;
@@ -186,7 +186,7 @@ async fn basic_test() {
     // Ensure the directory exists before creating the store
     fs::create_dir_all(path).await.expect("Failed to create base directory");
 
-    let mut d_web_backend = DWebBackend::new(path, port);
+    let mut d_web_backend = DWebBackend::new(path, port).expect("Unable to create DWebBackend");
 
     // Start the backend and wait for SIGINT signal.
     d_web_backend.start().await.expect("Unable to start");
