@@ -26,7 +26,7 @@ impl DataRepo {
     }
     async fn get_file_stream(&self, file_name: &str) -> Result<impl Stream<Item = Vec<u8>>> {
         let s = stream! {
-            let vec: Vec<u8> = Vec::new();
+            let mut vec: Vec<u8> = Vec::new();
             yield vec;
         };
 
