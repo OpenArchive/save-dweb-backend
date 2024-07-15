@@ -1,7 +1,14 @@
 use async_stream::stream;
 use futures_core::stream::Stream;
-use std::io::Result;
-use veilid_core::CryptoKey;
+use iroh::docs::store::fs::Store;
+use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config};
+use std::sync::Arc;
+use tokio::fs;
+use tracing::info;
+use eyre::{Result, anyhow};
+use xdg::BaseDirectories;
+use tmpdir::TmpDir;
+use std::path::{Path, PathBuf};
 
 pub struct DataRepo {}
 
@@ -67,23 +74,79 @@ impl Group {
 }
 
 struct DWebBackend {
-    path: String,
+    path: PathBuf,
     port: u16,
+    store: Store,
+    veilid_api: Option<VeilidAPI>,
 }
 
 impl DWebBackend {
-    pub fn new(path: String, port: u16) -> Self {
-        DWebBackend { path, port }
+    pub fn new(base_path: &Path, port: u16) -> Result<Self> {
+        let store_path = base_path.join("store.db");
+        let store = Store::persistent(&store_path).map_err(|e| anyhow!("Failed to create persistent store: {}", e))?;
+        Ok(DWebBackend {
+            path: base_path.to_path_buf(),
+            port,
+            store,
+            veilid_api: None,
+        })
     }
+
+    // Updated start method to initialize both Store and Veilid
     pub async fn start(&mut self) -> Result<()> {
-        // Init veilid
-        println!("Starting in {} with port {}", self.path, self.port);
+        println!("Starting on {} with port {}", self.path.display(), self.port);
+
+        // Ensure base directory exists
+        let base_dir = &self.path;
+        fs::create_dir_all(base_dir).await.map_err(|e| {
+            anyhow!("Failed to create base directory {}: {}", base_dir.display(), e)
+        })?;
+
+        // Initialize Veilid
+        let update_callback: Arc<dyn Fn(VeilidUpdate) + Send + Sync> = Arc::new(|update| {
+            info!("Received update: {:?}", update);
+        });
+
+        let xdg_dirs = BaseDirectories::with_prefix("save-dweb-backend")?;
+        let base_dir = xdg_dirs.get_data_home();
+
+        // Create a VeilidConfigInner instance
+        let config_inner = VeilidConfigInner {
+            program_name: "save-dweb-backend".to_string(),
+            namespace: "openarchive".into(), 
+            capabilities: Default::default(),
+            protected_store: veilid_core::VeilidConfigProtectedStore {
+                // avoid prompting for password, don't do this in production
+                allow_insecure_fallback: true,
+                always_use_insecure_storage: true,
+                directory: base_dir.join("protected_store").to_string_lossy().to_string(),
+                delete: false,
+                device_encryption_key_password: "".to_string(),
+                new_device_encryption_key_password: None,
+            },
+            table_store: veilid_core::VeilidConfigTableStore {
+                directory: base_dir.join("table_store").to_string_lossy().to_string(),
+                delete: false,
+            },
+            block_store: veilid_core::VeilidConfigBlockStore {
+                directory: base_dir.join("block_store").to_string_lossy().to_string(),
+                delete: false,
+            },
+            network: Default::default(),
+        };
+
+        self.veilid_api = Some(api_startup_config(update_callback, config_inner).await.map_err(|e| {
+            anyhow!("Failed to initialize Veilid API: {}", e)
+        })?);
+
         Ok(())
     }
 
     pub async fn stop(&self) -> Result<()> {
         println!("Stopping DWebBackend...");
-        // Implementation of stopping logic goes here (async).
+        if let Some(veilid) = &self.veilid_api {
+            veilid.clone().shutdown().await;
+        }
         Ok(())
     }
 
@@ -95,24 +158,15 @@ impl DWebBackend {
     }
 }
 
-#[tokio::test]
-async fn basic_test() {
-    let path = "./";
-    let port = 8080;
-
-    let mut d_web_backend = DWebBackend::new(String::from(path), port);
-
-    // Start the backend and wait for SIGINT signal.
-    d_web_backend.start().await.expect("Unable to start");
-    d_web_backend.stop().await.expect("Unable to stop");
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
-    let path = "./";
+    let path = xdg::BaseDirectories::with_prefix("save-dweb-backend")?.get_data_home();
     let port = 8080;
 
-    let mut d_web_backend = DWebBackend::new(String::from(path), port);
+    // Ensure the directory exists before creating the store
+    fs::create_dir_all(&path).await.expect("Failed to create base directory");
+
+    let mut d_web_backend = DWebBackend::new(&path, port)?;
 
     // Start the backend and wait for SIGINT signal.
     d_web_backend.start().await?;
@@ -123,4 +177,19 @@ async fn main() -> Result<()> {
     d_web_backend.stop().await?;
 
     Ok(())
+}
+
+#[tokio::test]
+async fn basic_test() {
+    let path = TmpDir::new("test_dweb_backend").await.unwrap();
+    let port = 8080;
+
+    // Ensure the directory exists before creating the store
+    fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+
+    let mut d_web_backend = DWebBackend::new(path.as_ref(), port).expect("Unable to create DWebBackend");
+
+    // Start the backend and wait for SIGINT signal.
+    d_web_backend.start().await.expect("Unable to start");
+    d_web_backend.stop().await.expect("Unable to stop");
 }
