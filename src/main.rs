@@ -245,5 +245,13 @@ async fn basic_test() {
     // Start the backend and wait for SIGINT signal.
     d_web_backend.start().await.expect("Unable to start");
     d_web_backend.create_group().await.expect("Unable to create group");
+
+    // Set and get group name
+    let group_key = d_web_backend.groups.keys().next().cloned().expect("Group not found");
+    let group = d_web_backend.get_group(group_key.clone()).await.expect("Group not found");
+    group.set_name("Test Group").await.expect("Unable to set group name");
+    let name = group.get_name().await.expect("Unable to get group name");
+    assert_eq!(name, "Test Group");
+
     d_web_backend.stop().await.expect("Unable to stop");
 }
