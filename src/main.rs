@@ -5,9 +5,9 @@ use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_sta
 use std::sync::Arc;
 use tokio::fs;
 use tracing::info;
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
 use eyre::{Result, anyhow};
+use xdg::BaseDirectories;
+use tmpdir::TmpDir;
 
 pub struct DataRepo {}
 
@@ -106,29 +106,29 @@ impl DWebBackend {
             info!("Received update: {:?}", update);
         });
 
-        let mut rng = StdRng::from_entropy();
-        let random_suffix: u16 = rng.gen_range(10000..60000);
+        let xdg_dirs = BaseDirectories::with_prefix("save-dweb-backend")?;
+        let base_dir = xdg_dirs.get_data_home().to_string_lossy().to_string();
 
         // Create a VeilidConfigInner instance
         let config_inner = VeilidConfigInner {
-            program_name: format!("save-dweb-backend-{}", random_suffix),
+            program_name: "save-dweb-backend".to_string(),
             namespace: "openarchive".into(), 
             capabilities: Default::default(),
             protected_store: veilid_core::VeilidConfigProtectedStore {
                 // avoid prompting for password, don't do this in production
                 allow_insecure_fallback: true,
                 always_use_insecure_storage: true,
-                directory: format!("{}/protected_store_{}", base_dir, random_suffix),
+                directory: format!("{}/protected_store", base_dir),
                 delete: false,
                 device_encryption_key_password: "".to_string(),
                 new_device_encryption_key_password: None,
             },
             table_store: veilid_core::VeilidConfigTableStore {
-                directory: format!("{}/table_store_{}", base_dir, random_suffix),
+                directory: format!("{}/table_store", base_dir),
                 delete: false,
             },
             block_store: veilid_core::VeilidConfigBlockStore {
-                directory: format!("{}/block_store_{}", base_dir, random_suffix),
+                directory: format!("{}/block_store", base_dir),
                 delete: false,
             },
             network: Default::default(),
@@ -159,13 +159,13 @@ impl DWebBackend {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let path = "./tmp/save_dweb_backend"; // Changed to use a relative temporary directory
+    let path = xdg::BaseDirectories::with_prefix("save-dweb-backend")?.get_data_home().to_string_lossy().to_string();
     let port = 8080;
 
     // Ensure the directory exists before creating the store
-    fs::create_dir_all(path).await.expect("Failed to create base directory");
+    fs::create_dir_all(&path).await.expect("Failed to create base directory");
 
-    let mut d_web_backend = DWebBackend::new(path, port)?;
+    let mut d_web_backend = DWebBackend::new(&path, port)?;
 
     // Start the backend and wait for SIGINT signal.
     d_web_backend.start().await?;
@@ -180,13 +180,13 @@ async fn main() -> Result<()> {
 
 #[tokio::test]
 async fn basic_test() {
-    let path = "./tmp/test_dweb_backend";
+    let path = TmpDir::new("test_dweb_backend").await.unwrap();
     let port = 8080;
 
     // Ensure the directory exists before creating the store
-    fs::create_dir_all(path).await.expect("Failed to create base directory");
+    fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
 
-    let mut d_web_backend = DWebBackend::new(path, port).expect("Unable to create DWebBackend");
+    let mut d_web_backend = DWebBackend::new(path.as_ref().to_str().unwrap(), port).expect("Unable to create DWebBackend");
 
     // Start the backend and wait for SIGINT signal.
     d_web_backend.start().await.expect("Unable to start");
