@@ -277,5 +277,17 @@ async fn basic_test() {
     let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
     assert_eq!(name, TEST_GROUP_NAME);
 
+    // Store the group's keypair in the protected store
+    let protected_store = d_web_backend.veilid_api.as_ref().unwrap().protected_store().unwrap();
+    group.store_keypair(&protected_store).await.expect(UNABLE_TO_STORE_KEYPAIR);
+
+    // Retrieve the group's keypair from the protected store
+    let keypair_data = protected_store.load_user_secret(group_key.to_string()).await.expect(FAILED_TO_LOAD_KEYPAIR).expect(KEYPAIR_NOT_FOUND);
+    let retrieved_keypair: GroupKeypair = serde_cbor::from_slice(&keypair_data).expect(FAILED_TO_DESERIALIZE_KEYPAIR);
+
+    // Verify the stored keypair
+    assert_eq!(retrieved_keypair.public_key, group.id);
+    assert_eq!(retrieved_keypair.secret_key, group.encryption_key.value);
+
     d_web_backend.stop().await.expect("Unable to stop");
 }
