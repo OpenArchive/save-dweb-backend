@@ -234,6 +234,11 @@ async fn main() -> Result<()> {
 
 #[tokio::test]
 async fn basic_test() {
+    const GROUP_NOT_FOUND: &str = "Group not found";
+    const UNABLE_TO_SET_GROUP_NAME: &str = "Unable to set group name";
+    const UNABLE_TO_GET_GROUP_NAME: &str = "Unable to get group name";
+    const TEST_GROUP_NAME: &str = "Test Group";
+
     let path = TmpDir::new("test_dweb_backend").await.unwrap();
     let port = 8080;
 
@@ -247,11 +252,11 @@ async fn basic_test() {
     d_web_backend.create_group().await.expect("Unable to create group");
 
     // Set and get group name
-    let group_key = d_web_backend.groups.keys().next().cloned().expect("Group not found");
-    let group = d_web_backend.get_group(group_key.clone()).await.expect("Group not found");
-    group.set_name("Test Group").await.expect("Unable to set group name");
-    let name = group.get_name().await.expect("Unable to get group name");
-    assert_eq!(name, "Test Group");
+    let group_key = d_web_backend.groups.keys().next().cloned().expect(GROUP_NOT_FOUND);
+    let group = d_web_backend.get_group(group_key.clone()).await.expect(GROUP_NOT_FOUND);
+    group.set_name(TEST_GROUP_NAME).await.expect(UNABLE_TO_SET_GROUP_NAME);
+    let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
+    assert_eq!(name, TEST_GROUP_NAME);
 
     d_web_backend.stop().await.expect("Unable to stop");
 }
