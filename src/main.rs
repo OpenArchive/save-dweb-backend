@@ -11,6 +11,11 @@ use tmpdir::TmpDir;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 
+const GROUP_NOT_FOUND: &str = "Group not found";
+const UNABLE_TO_SET_GROUP_NAME: &str = "Unable to set group name";
+const UNABLE_TO_GET_GROUP_NAME: &str = "Unable to get group name";
+const TEST_GROUP_NAME: &str = "Test Group";
+
 pub struct DataRepo {}
 
 impl DataRepo {
@@ -234,10 +239,6 @@ async fn main() -> Result<()> {
 
 #[tokio::test]
 async fn basic_test() {
-    const GROUP_NOT_FOUND: &str = "Group not found";
-    const UNABLE_TO_SET_GROUP_NAME: &str = "Unable to set group name";
-    const UNABLE_TO_GET_GROUP_NAME: &str = "Unable to get group name";
-    const TEST_GROUP_NAME: &str = "Test Group";
 
     let path = TmpDir::new("test_dweb_backend").await.unwrap();
     let port = 8080;
