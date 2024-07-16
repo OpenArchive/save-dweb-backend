@@ -205,7 +205,7 @@ impl DWebBackend {
     }
 
     pub async fn get_group(&self, key: CryptoKey) -> Result<Box<Group>> {
-        self.groups.get(&key).cloned().ok_or_else(|| anyhow!("Group not found"))
+        self.groups.get(&key).cloned().ok_or_else(|| anyhow!(GROUP_NOT_FOUND))
     }
 
     pub async fn list_groups(&self) -> Result<Vec<Box<Group>>> {
