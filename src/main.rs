@@ -17,6 +17,10 @@ const GROUP_NOT_FOUND: &str = "Group not found";
 const UNABLE_TO_SET_GROUP_NAME: &str = "Unable to set group name";
 const UNABLE_TO_GET_GROUP_NAME: &str = "Unable to get group name";
 const TEST_GROUP_NAME: &str = "Test Group";
+const UNABLE_TO_STORE_KEYPAIR: &str = "Unable to store keypair";
+const FAILED_TO_LOAD_KEYPAIR: &str = "Failed to load keypair";
+const KEYPAIR_NOT_FOUND: &str = "Keypair not found";
+const FAILED_TO_DESERIALIZE_KEYPAIR: &str = "Failed to deserialize keypair";
 
 pub struct DataRepo {}
 
