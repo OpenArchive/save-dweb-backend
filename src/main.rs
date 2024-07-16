@@ -143,7 +143,7 @@ impl DWebBackend {
         })
     }
 
-    // Updated start method to initialize both Store and Veilid
+    // Updated start method to initialize Veilid
     pub async fn start(&mut self) -> Result<()> {
         println!("Starting on {} with port {}", self.path.display(), self.port);
 
