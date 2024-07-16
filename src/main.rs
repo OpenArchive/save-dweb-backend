@@ -104,6 +104,16 @@ impl Group {
     pub async fn leave(&self) -> Result<()> {
         unimplemented!("WIP")
     }
+
+    pub async fn store_keypair(&self, protected_store: &veilid_core::ProtectedStore) -> Result<()> {
+        let keypair = GroupKeypair {
+            public_key: self.id.clone(),
+            secret_key: self.encryption_key.value.clone(),
+        };
+        let keypair_data = serde_cbor::to_vec(&keypair).map_err(|e| anyhow!("Failed to serialize keypair: {}", e))?;
+        protected_store.save_user_secret(self.id.to_string(), &keypair_data).await.map_err(|e| anyhow!(UNABLE_TO_STORE_KEYPAIR))?;
+        Ok(())
+    }
 }
 
 struct DWebBackend {
