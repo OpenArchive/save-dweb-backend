@@ -119,19 +119,15 @@ impl Group {
 struct DWebBackend {
     path: PathBuf,
     port: u16,
-    store: Store,
     veilid_api: Option<VeilidAPI>,
     groups: HashMap<CryptoKey, Box<Group>>,
 }
 
 impl DWebBackend {
     pub fn new(base_path: &Path, port: u16) -> Result<Self> {
-        let store_path = base_path.join("store.db");
-        let store = Store::persistent(&store_path).map_err(|e| anyhow!("Failed to create persistent store: {}", e))?;
         Ok(DWebBackend {
             path: base_path.to_path_buf(),
             port,
-            store,
             veilid_api: None,
             groups: HashMap::new(),
         })
