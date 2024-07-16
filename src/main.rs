@@ -22,6 +22,12 @@ const FAILED_TO_LOAD_KEYPAIR: &str = "Failed to load keypair";
 const KEYPAIR_NOT_FOUND: &str = "Keypair not found";
 const FAILED_TO_DESERIALIZE_KEYPAIR: &str = "Failed to deserialize keypair";
 
+#[derive(Serialize, Deserialize)]
+struct GroupKeypair {
+    public_key: CryptoKey,
+    secret_key: CryptoKey,
+}
+
 pub struct DataRepo {}
 
 impl DataRepo {
