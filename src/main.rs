@@ -117,7 +117,7 @@ impl Group {
         unimplemented!("WIP")
     }
 
-    pub async fn store_keypair(&self, protected_store: &veilid_core::ProtectedStore) -> Result<()> {
+    async fn store_keypair(&self, protected_store: &veilid_core::ProtectedStore) -> Result<()> {
         let keypair = GroupKeypair {
             public_key: self.id.clone(),
             secret_key: self.secret_key.value.clone(),
