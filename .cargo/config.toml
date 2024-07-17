@@ -1,0 +1,9 @@
+[build]
+rustflags = [
+    "-A", "unused-imports",
+    "-A", "unused-variables",
+    "-A", "unused-mut",
+    "-A", "dead-code",
+    "-A", "clippy::clone-on-copy",
+    "-A", "clippy::needless-borrows-for-generic_args",
+]
