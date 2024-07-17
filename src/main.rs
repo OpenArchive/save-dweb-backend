@@ -222,6 +222,10 @@ impl DWebBackend {
             routing_context: Arc::new(routing_context), // Store routing context in group
         };
 
+        // Store the group's keypair in the protected store
+        let protected_store = veilid.protected_store().unwrap();
+        group.store_keypair(&protected_store).await?;
+
         self.groups.insert(group.get_id(), Box::new(group));
 
         Ok(())
