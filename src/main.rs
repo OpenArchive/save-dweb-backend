@@ -120,7 +120,7 @@ impl Group {
     async fn store_keypair(&self, protected_store: &veilid_core::ProtectedStore) -> Result<()> {
         let keypair = GroupKeypair {
             public_key: self.id.clone(),
-            secret_key: self.secret_key.value.clone(),
+            secret_key: self.secret_key.as_ref().map(|sk| sk.value.clone()),
             encryption_key: self.encryption_key.value.clone(),
         };
         let keypair_data = serde_cbor::to_vec(&keypair).map_err(|e| anyhow!("Failed to serialize keypair: {}", e))?;
@@ -218,7 +218,7 @@ impl DWebBackend {
             id: keypair.key.clone(),
             dht_record,
             encryption_key,
-            secret_key: CryptoTyped::new(CRYPTO_KIND_VLD0, keypair.secret),
+            secret_key: Some(CryptoTyped::new(CRYPTO_KIND_VLD0, keypair.secret)),
             routing_context: Arc::new(routing_context), // Store routing context in group
         };
 
@@ -246,7 +246,7 @@ impl DWebBackend {
         
         // open_dht_record function handles both cases: with and without the private key.
         let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
-        let dht_record = if let Some(secret_key) = Some(retrieved_keypair.secret_key.clone()) {
+        let dht_record = if let Some(secret_key) = retrieved_keypair.secret_key.clone() {
             routing_context.open_dht_record(
                 CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.public_key.clone()), 
                 Some(KeyPair {
@@ -265,7 +265,7 @@ impl DWebBackend {
             id: retrieved_keypair.public_key.clone(),
             dht_record,
             encryption_key: CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.encryption_key),
-            secret_key: CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.secret_key),
+            secret_key: retrieved_keypair.secret_key.map(|sk| CryptoTyped::new(CRYPTO_KIND_VLD0, sk)),
             routing_context: Arc::new(routing_context),
         };
 
@@ -313,7 +313,7 @@ async fn main() -> Result<()> {
     } else {
         let group = d_web_backend.create_group().await?;
         println!("Group created with Public Key: {:?}", group.id);
-        println!("Group created with Secret Key: {:?}", group.secret_key.value);
+        println!("Group created with Secret Key: {:?}", group.secret_key.as_ref().unwrap().value);
     }
 
     // Stop the backend after receiving SIGINT signal.
