@@ -266,6 +266,19 @@ impl DWebBackend {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let matches = Command::new("Save DWeb Backend")
+        .arg(Arg::new("pubkey")
+            .long("pubkey")
+            .value_name("PUBKEY")
+            .help("Sets the public key for the group")
+            .value_parser(clap::value_parser!(String)))
+        .arg(Arg::new("seckey")
+            .long("seckey")
+            .value_name("SECKEY")
+            .help("Sets the secret key for the group")
+            .value_parser(clap::value_parser!(String)))
+        .get_matches();
+
     let path = xdg::BaseDirectories::with_prefix("save-dweb-backend")?.get_data_home();
     let port = 8080;
 
