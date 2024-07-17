@@ -1,7 +1,7 @@
 use async_stream::stream;
 use futures_core::stream::Stream;
 use iroh::docs::store::fs::Store;
-use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config, CRYPTO_KIND_VLD0, DHTSchema, CryptoTyped, DHTRecordDescriptor, vld0_generate_keypair};
+use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config, CRYPTO_KIND_VLD0, DHTSchema, CryptoTyped, DHTRecordDescriptor, vld0_generate_keypair, KeyPair};
 use std::sync::Arc;
 use tokio::fs;
 use tracing::info;
@@ -244,9 +244,22 @@ impl DWebBackend {
         let retrieved_keypair: GroupKeypair = serde_cbor::from_slice(&keypair_data)
             .map_err(|_| anyhow!(FAILED_TO_DESERIALIZE_KEYPAIR))?;
         
-        // Assuming an appropriate method to open DHT record from public key
+        // open_dht_record function handles both cases: with and without the private key.
         let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
-        let dht_record = routing_context.open_dht_record(CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.public_key.clone()), None).await?;
+        let dht_record = if let Some(secret_key) = Some(retrieved_keypair.secret_key.clone()) {
+            routing_context.open_dht_record(
+                CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.public_key.clone()), 
+                Some(KeyPair {
+                    key: retrieved_keypair.public_key.clone(),
+                    secret: secret_key,
+                })
+            ).await?
+        } else {
+            routing_context.open_dht_record(
+                CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.public_key.clone()), 
+                None
+            ).await?
+        };
 
         let group = Group {
             id: retrieved_keypair.public_key.clone(),
