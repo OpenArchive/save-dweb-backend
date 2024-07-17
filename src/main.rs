@@ -11,6 +11,7 @@ use tmpdir::TmpDir;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
+use clap::{Command, Arg};
 
 const GROUP_NOT_FOUND: &str = "Group not found";
 const UNABLE_TO_SET_GROUP_NAME: &str = "Unable to set group name";
