@@ -25,7 +25,7 @@ const FAILED_TO_DESERIALIZE_KEYPAIR: &str = "Failed to deserialize keypair";
 #[derive(Serialize, Deserialize)]
 struct GroupKeypair {
     public_key: CryptoKey,
-    secret_key: CryptoKey,
+    secret_key: Option<CryptoKey>,
     encryption_key: CryptoKey,
 }
 
@@ -62,7 +62,7 @@ pub struct Group {
     id: CryptoKey,
     dht_record: DHTRecordDescriptor,
     encryption_key: CryptoTyped<CryptoKey>,
-    secret_key: CryptoTyped<CryptoKey>,
+    secret_key: Option<CryptoTyped<CryptoKey>>,
     routing_context: Arc<veilid_core::RoutingContext>, // Store the routing context here
 }
 
