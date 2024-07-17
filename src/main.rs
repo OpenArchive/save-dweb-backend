@@ -350,19 +350,20 @@ async fn basic_test() {
 
     // Restart the backend
     d_web_backend.start().await.expect("Unable to restart");
+    // Retrieve the group using the public key
+    let loaded_group = d_web_backend.get_group(group_key.clone()).await.expect(GROUP_NOT_FOUND);
 
-    // Retrieve the group's keypair from the protected store
+    // Verify the stored keypair
     let protected_store = d_web_backend.veilid_api.as_ref().unwrap().protected_store().unwrap();
     let keypair_data = protected_store.load_user_secret(group_key.to_string()).await.expect(FAILED_TO_LOAD_KEYPAIR).expect(KEYPAIR_NOT_FOUND);
     let retrieved_keypair: GroupKeypair = serde_cbor::from_slice(&keypair_data).expect(FAILED_TO_DESERIALIZE_KEYPAIR);
 
     // Verify the stored keypair
     assert_eq!(retrieved_keypair.public_key, group.id);
-    assert_eq!(retrieved_keypair.secret_key, group.secret_key.value);
+    assert_eq!(retrieved_keypair.secret_key, group.secret_key.as_ref().map(|sk| sk.value.clone()));
     assert_eq!(retrieved_keypair.encryption_key, group.encryption_key.value);
 
     // Verify the group can be loaded using the public key
-    let loaded_group = d_web_backend.get_group(retrieved_keypair.public_key).await.expect(GROUP_NOT_FOUND);
     assert_eq!(loaded_group.get_id(), retrieved_keypair.public_key);
 
     d_web_backend.stop().await.expect("Unable to stop");
