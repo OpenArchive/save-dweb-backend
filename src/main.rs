@@ -271,7 +271,7 @@ async fn basic_test() {
 
     let mut d_web_backend = DWebBackend::new(path.as_ref(), port).expect("Unable to create DWebBackend");
 
-    // Start the backend and wait for SIGINT signal.
+    // Start the backend and create a group
     d_web_backend.start().await.expect("Unable to start");
     d_web_backend.create_group().await.expect("Unable to create group");
 
@@ -282,17 +282,25 @@ async fn basic_test() {
     let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
     assert_eq!(name, TEST_GROUP_NAME);
 
-    // Store the group's keypair in the protected store
-    let protected_store = d_web_backend.veilid_api.as_ref().unwrap().protected_store().unwrap();
-    group.store_keypair(&protected_store).await.expect(UNABLE_TO_STORE_KEYPAIR);
+    // Stop the backend
+    d_web_backend.stop().await.expect("Unable to stop");
+
+    // Restart the backend
+    d_web_backend.start().await.expect("Unable to restart");
 
     // Retrieve the group's keypair from the protected store
+    let protected_store = d_web_backend.veilid_api.as_ref().unwrap().protected_store().unwrap();
     let keypair_data = protected_store.load_user_secret(group_key.to_string()).await.expect(FAILED_TO_LOAD_KEYPAIR).expect(KEYPAIR_NOT_FOUND);
     let retrieved_keypair: GroupKeypair = serde_cbor::from_slice(&keypair_data).expect(FAILED_TO_DESERIALIZE_KEYPAIR);
 
     // Verify the stored keypair
     assert_eq!(retrieved_keypair.public_key, group.id);
-    assert_eq!(retrieved_keypair.secret_key, group.encryption_key.value);
+    assert_eq!(retrieved_keypair.secret_key, group.secret_key.value);
+    assert_eq!(retrieved_keypair.encryption_key, group.encryption_key.value);
+
+    // Verify the group can be loaded using the public key
+    let loaded_group = d_web_backend.get_group(retrieved_keypair.public_key).await.expect(GROUP_NOT_FOUND);
+    assert_eq!(loaded_group.get_id(), retrieved_keypair.public_key);
 
     d_web_backend.stop().await.expect("Unable to stop");
 }
