@@ -26,6 +26,7 @@ const FAILED_TO_DESERIALIZE_KEYPAIR: &str = "Failed to deserialize keypair";
 struct GroupKeypair {
     public_key: CryptoKey,
     secret_key: CryptoKey,
+    encryption_key: CryptoKey,
 }
 
 pub struct DataRepo {}
@@ -61,6 +62,7 @@ pub struct Group {
     id: CryptoKey,
     dht_record: DHTRecordDescriptor,
     encryption_key: CryptoTyped<CryptoKey>,
+    secret_key: CryptoTyped<CryptoKey>,
     routing_context: Arc<veilid_core::RoutingContext>, // Store the routing context here
 }
 
@@ -118,7 +120,8 @@ impl Group {
     pub async fn store_keypair(&self, protected_store: &veilid_core::ProtectedStore) -> Result<()> {
         let keypair = GroupKeypair {
             public_key: self.id.clone(),
-            secret_key: self.encryption_key.value.clone(),
+            secret_key: self.secret_key.value.clone(),
+            encryption_key: self.encryption_key.value.clone(),
         };
         let keypair_data = serde_cbor::to_vec(&keypair).map_err(|e| anyhow!("Failed to serialize keypair: {}", e))?;
         protected_store.save_user_secret(self.id.to_string(), &keypair_data).await.map_err(|e| anyhow!(UNABLE_TO_STORE_KEYPAIR))?;
@@ -209,11 +212,13 @@ impl DWebBackend {
 
         let dht_record = routing_context.create_dht_record(schema, kind).await?;
         let encryption_key = CryptoTyped::new(CRYPTO_KIND_VLD0, CryptoKey::new([0; 32]));
+        let secret_key = CryptoTyped::new(CRYPTO_KIND_VLD0, CryptoKey::new([0; 32]));
 
         let group = Group {
             id: encryption_key.value,
             dht_record,
             encryption_key,
+            secret_key,
             routing_context: Arc::new(routing_context), // Store routing context in group
         };
 
