@@ -11,6 +11,11 @@ use tmpdir::TmpDir;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 
+const GROUP_NOT_FOUND: &str = "Group not found";
+const UNABLE_TO_SET_GROUP_NAME: &str = "Unable to set group name";
+const UNABLE_TO_GET_GROUP_NAME: &str = "Unable to get group name";
+const TEST_GROUP_NAME: &str = "Test Group";
+
 pub struct DataRepo {}
 
 impl DataRepo {
@@ -200,7 +205,7 @@ impl DWebBackend {
     }
 
     pub async fn get_group(&self, key: CryptoKey) -> Result<Box<Group>> {
-        self.groups.get(&key).cloned().ok_or_else(|| anyhow!("Group not found"))
+        self.groups.get(&key).cloned().ok_or_else(|| anyhow!(GROUP_NOT_FOUND))
     }
 
     pub async fn list_groups(&self) -> Result<Vec<Box<Group>>> {
@@ -234,6 +239,7 @@ async fn main() -> Result<()> {
 
 #[tokio::test]
 async fn basic_test() {
+
     let path = TmpDir::new("test_dweb_backend").await.unwrap();
     let port = 8080;
 
@@ -245,5 +251,13 @@ async fn basic_test() {
     // Start the backend and wait for SIGINT signal.
     d_web_backend.start().await.expect("Unable to start");
     d_web_backend.create_group().await.expect("Unable to create group");
+
+    // Set and get group name
+    let group_key = d_web_backend.groups.keys().next().cloned().expect(GROUP_NOT_FOUND);
+    let group = d_web_backend.get_group(group_key.clone()).await.expect(GROUP_NOT_FOUND);
+    group.set_name(TEST_GROUP_NAME).await.expect(UNABLE_TO_SET_GROUP_NAME);
+    let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
+    assert_eq!(name, TEST_GROUP_NAME);
+
     d_web_backend.stop().await.expect("Unable to stop");
 }

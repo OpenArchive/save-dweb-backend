@@ -85,6 +85,21 @@ Flow looks like this:
     - Stop veilid node in stop method
     - For the test find a way to make the storage ephemeral, e.g. make a path in `/tmp`, maybe use a utility
 - create groups and publish to veilid with name, read name from keypair
+    - store a map of groups from their public key to a `Box<Group>` in the backend
+    - Create a routing context per group
+    - Inside create group create a new dht record, also use veilid crypto to generate a random encryption key
+    - Store dht record in Group
+    - Invoke `set_name` on group which will set subkey `0` to the string
+    - Have `get_name` read from subkey 0
+    - write a unit test to see that you can write then read the name
+    - Store group keypair/secret key in protected table store with the public key as the "key" and the data as the value. (in cbor using serde?)
+    - When loading the group by public key attempt to read from the store, error if not available
+    - Add method to load group from public key, encryption key, `Option<private key>` which will skip creating a new dht record, have the public key only api invoke this
+    - add method to close the group and unload the dht record / remove from the backend map
+    - write a test to see that we can load a group from storage after we closed it, and after we stopped the veilid node / started a new one
+    - Add `encrypt` and `decrypt` methods to the Group
+    - Encrypt the data before setting in `set_name`, decrypt in `get_name`, do so via the dht wrappers
+    - Ensure the `get_name` tests still work.
 - create data repo with name and advertise to dht/read name back
 - add own repo to group, list known repos, get their names
 - add tunnel to own repo, send "ping" app_call to others
