@@ -215,7 +215,7 @@ impl DWebBackend {
         let secret_key = CryptoTyped::new(CRYPTO_KIND_VLD0, CryptoKey::new([0; 32]));
 
         let group = Group {
-            id: encryption_key.value,
+            id: public_key.clone(),
             dht_record,
             encryption_key,
             secret_key,
