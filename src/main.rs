@@ -232,7 +232,31 @@ impl DWebBackend {
     }
 
     pub async fn get_group(&self, key: CryptoKey) -> Result<Box<Group>> {
-        self.groups.get(&key).cloned().ok_or_else(|| anyhow!(GROUP_NOT_FOUND))
+        if let Some(group) = self.groups.get(&key) {
+            return Ok(group.clone());
+        }
+
+        let protected_store = self.veilid_api.as_ref().unwrap().protected_store().unwrap();
+        let keypair_data = protected_store.load_user_secret(key.to_string()).await
+            .map_err(|_| anyhow!(FAILED_TO_LOAD_KEYPAIR))?
+            .ok_or_else(|| anyhow!(KEYPAIR_NOT_FOUND))?;
+        
+        let retrieved_keypair: GroupKeypair = serde_cbor::from_slice(&keypair_data)
+            .map_err(|_| anyhow!(FAILED_TO_DESERIALIZE_KEYPAIR))?;
+        
+        // Assuming an appropriate method to open DHT record from public key
+        let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
+        let dht_record = routing_context.open_dht_record(CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.public_key.clone()), None).await?;
+
+        let group = Group {
+            id: retrieved_keypair.public_key.clone(),
+            dht_record,
+            encryption_key: CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.encryption_key),
+            secret_key: CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.secret_key),
+            routing_context: Arc::new(routing_context),
+        };
+
+        Ok(Box::new(group))
     }
 
     pub async fn list_groups(&self) -> Result<Vec<Box<Group>>> {
