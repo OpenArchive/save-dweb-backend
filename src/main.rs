@@ -327,8 +327,7 @@ async fn basic_test() {
     let group = d_web_backend.create_group().await.expect("Unable to create group");
 
     // Set and get group name
-    let group_key = d_web_backend.groups.keys().next().cloned().expect(GROUP_NOT_FOUND);
-    let group = d_web_backend.get_group(group_key.clone()).await.expect(GROUP_NOT_FOUND);
+    let group_key = group.id.clone();
     group.set_name(TEST_GROUP_NAME).await.expect(UNABLE_TO_SET_GROUP_NAME);
     let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
     assert_eq!(name, TEST_GROUP_NAME);
