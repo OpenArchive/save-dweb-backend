@@ -1,7 +1,7 @@
 use async_stream::stream;
 use futures_core::stream::Stream;
 use iroh::docs::store::fs::Store;
-use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config, CRYPTO_KIND_VLD0, DHTSchema, CryptoTyped, DHTRecordDescriptor};
+use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config, CRYPTO_KIND_VLD0, DHTSchema, CryptoTyped, DHTRecordDescriptor, vld0_generate_keypair};
 use std::sync::Arc;
 use tokio::fs;
 use tracing::info;
@@ -211,14 +211,14 @@ impl DWebBackend {
         let kind = Some(CRYPTO_KIND_VLD0);
 
         let dht_record = routing_context.create_dht_record(schema, kind).await?;
+        let keypair = vld0_generate_keypair();
         let encryption_key = CryptoTyped::new(CRYPTO_KIND_VLD0, CryptoKey::new([0; 32]));
-        let secret_key = CryptoTyped::new(CRYPTO_KIND_VLD0, CryptoKey::new([0; 32]));
 
         let group = Group {
-            id: public_key.clone(),
+            id: keypair.key.clone(),
             dht_record,
             encryption_key,
-            secret_key,
+            secret_key: CryptoTyped::new(CRYPTO_KIND_VLD0, keypair.secret),
             routing_context: Arc::new(routing_context), // Store routing context in group
         };
 
