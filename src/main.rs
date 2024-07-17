@@ -324,7 +324,7 @@ async fn basic_test() {
 
     // Start the backend and create a group
     d_web_backend.start().await.expect("Unable to start");
-    d_web_backend.create_group().await.expect("Unable to create group");
+    let group = d_web_backend.create_group().await.expect("Unable to create group");
 
     // Set and get group name
     let group_key = d_web_backend.groups.keys().next().cloned().expect(GROUP_NOT_FOUND);
