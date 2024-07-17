@@ -203,7 +203,7 @@ impl DWebBackend {
         Ok(())
     }
 
-    pub async fn create_group(&mut self) -> Result<()> {
+    pub async fn create_group(&mut self) -> Result<Group> {
         let veilid = self.veilid_api.as_ref().ok_or_else(|| anyhow!("Veilid API is not initialized"))?;
         let routing_context = veilid.routing_context()?;
         let schema = DHTSchema::dflt(1)?;
@@ -225,9 +225,9 @@ impl DWebBackend {
         let protected_store = veilid.protected_store().unwrap();
         group.store_keypair(&protected_store).await?;
 
-        self.groups.insert(group.get_id(), Box::new(group));
+        self.groups.insert(group.get_id(), Box::new(group.clone()));
 
-        Ok(())
+        Ok(group)
     }
 
     pub async fn get_group(&self, key: CryptoKey) -> Result<Box<Group>> {
