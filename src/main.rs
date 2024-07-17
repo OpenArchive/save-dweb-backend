@@ -287,11 +287,21 @@ async fn main() -> Result<()> {
 
     let mut d_web_backend = DWebBackend::new(&path, port)?;
 
-    // Start the backend and wait for SIGINT signal.
+    // Start the backend
     d_web_backend.start().await?;
 
-    // Create a group
-    d_web_backend.create_group().await?;
+    // Check if keys were provided, otherwise create a new group
+    if matches.contains_id("pubkey") && matches.contains_id("seckey") {
+        let pubkey = matches.get_one::<String>("pubkey").unwrap();
+        let seckey = matches.get_one::<String>("seckey").unwrap();
+        println!("Provided Public Key: {:?}", pubkey);
+        println!("Provided Secret Key: {:?}", seckey);
+        // Use the provided keys as needed
+    } else {
+        let group = d_web_backend.create_group().await?;
+        println!("Group created with Public Key: {:?}", group.id);
+        println!("Group created with Secret Key: {:?}", group.secret_key.value);
+    }
 
     // Stop the backend after receiving SIGINT signal.
     tokio::signal::ctrl_c().await?;
