@@ -1,7 +1,7 @@
 use async_stream::stream;
 use futures_core::stream::Stream;
 use iroh::docs::store::fs::Store;
-use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config};
+use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config, CRYPTO_KIND_VLD0, DHTSchema, CryptoTyped, DHTRecordDescriptor};
 use std::sync::Arc;
 use tokio::fs;
 use tracing::info;
@@ -9,6 +9,12 @@ use eyre::{Result, anyhow};
 use xdg::BaseDirectories;
 use tmpdir::TmpDir;
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+
+const GROUP_NOT_FOUND: &str = "Group not found";
+const UNABLE_TO_SET_GROUP_NAME: &str = "Unable to set group name";
+const UNABLE_TO_GET_GROUP_NAME: &str = "Unable to get group name";
+const TEST_GROUP_NAME: &str = "Test Group";
 
 pub struct DataRepo {}
 
@@ -38,11 +44,18 @@ impl DataRepo {
     }
 }
 
-pub struct Group {}
+#[derive(Clone)]
+pub struct Group {
+    id: CryptoKey,
+    dht_record: DHTRecordDescriptor,
+    encryption_key: CryptoTyped<CryptoKey>,
+    routing_context: Arc<veilid_core::RoutingContext>, // Store the routing context here
+}
+
 impl Group {
     // Able to find group on DHT
     pub fn get_id(&self) -> CryptoKey {
-        unimplemented!("WIP")
+        self.id.clone()
     }
     // Able to add oneself to the group
     pub fn get_write_key(&self) -> Option<CryptoKey> {
@@ -50,12 +63,30 @@ impl Group {
     }
     // Able to read from group
     pub fn get_encryption_key(&self) -> CryptoKey {
-        unimplemented!("WIP")
+        self.encryption_key.value
+    }
+
+    pub async fn set_name(&self, name: &str) -> Result<()> {
+        let routing_context = &self.routing_context;
+        let key = self.dht_record.key().clone();
+        routing_context.set_dht_value(key, 0, name.as_bytes().to_vec(), None).await?;
+        Ok(())
+    }
+
+    pub async fn get_name(&self) -> Result<String> {
+        let routing_context = &self.routing_context;
+        let key = self.dht_record.key().clone();
+        let value = routing_context.get_dht_value(key, 0, false).await?;
+        match value {
+            Some(value) => Ok(String::from_utf8(value.data().to_vec()).map_err(|e| anyhow!("Failed to convert DHT value to string: {}", e))?),
+            None => Err(anyhow!("Value not found"))
+        }
     }
 
     pub async fn name(&self) -> Result<String> {
-        unimplemented!("WIP")
+        self.get_name().await
     }
+
     pub async fn members(&self) -> Result<Vec<CryptoKey>> {
         unimplemented!("WIP")
     }
@@ -78,6 +109,7 @@ struct DWebBackend {
     port: u16,
     store: Store,
     veilid_api: Option<VeilidAPI>,
+    groups: HashMap<CryptoKey, Box<Group>>,
 }
 
 impl DWebBackend {
@@ -89,6 +121,7 @@ impl DWebBackend {
             port,
             store,
             veilid_api: None,
+            groups: HashMap::new(),
         })
     }
 
@@ -150,11 +183,33 @@ impl DWebBackend {
         Ok(())
     }
 
-    pub async fn get_group(&self, key: CryptoKey) -> Result<Box<Group>> {
-        unimplemented!("WIP")
+    pub async fn create_group(&mut self) -> Result<()> {
+        let veilid = self.veilid_api.as_ref().ok_or_else(|| anyhow!("Veilid API is not initialized"))?;
+        let routing_context = veilid.routing_context()?;
+        let schema = DHTSchema::dflt(1)?;
+        let kind = Some(CRYPTO_KIND_VLD0);
+
+        let dht_record = routing_context.create_dht_record(schema, kind).await?;
+        let encryption_key = CryptoTyped::new(CRYPTO_KIND_VLD0, CryptoKey::new([0; 32]));
+
+        let group = Group {
+            id: encryption_key.value,
+            dht_record,
+            encryption_key,
+            routing_context: Arc::new(routing_context), // Store routing context in group
+        };
+
+        self.groups.insert(group.get_id(), Box::new(group));
+
+        Ok(())
     }
+
+    pub async fn get_group(&self, key: CryptoKey) -> Result<Box<Group>> {
+        self.groups.get(&key).cloned().ok_or_else(|| anyhow!(GROUP_NOT_FOUND))
+    }
+
     pub async fn list_groups(&self) -> Result<Vec<Box<Group>>> {
-        unimplemented!("WIP")
+        Ok(self.groups.values().cloned().collect())
     }
 }
 
@@ -171,6 +226,9 @@ async fn main() -> Result<()> {
     // Start the backend and wait for SIGINT signal.
     d_web_backend.start().await?;
 
+    // Create a group
+    d_web_backend.create_group().await?;
+
     // Stop the backend after receiving SIGINT signal.
     tokio::signal::ctrl_c().await?;
 
@@ -181,6 +239,7 @@ async fn main() -> Result<()> {
 
 #[tokio::test]
 async fn basic_test() {
+
     let path = TmpDir::new("test_dweb_backend").await.unwrap();
     let port = 8080;
 
@@ -191,5 +250,14 @@ async fn basic_test() {
 
     // Start the backend and wait for SIGINT signal.
     d_web_backend.start().await.expect("Unable to start");
+    d_web_backend.create_group().await.expect("Unable to create group");
+
+    // Set and get group name
+    let group_key = d_web_backend.groups.keys().next().cloned().expect(GROUP_NOT_FOUND);
+    let group = d_web_backend.get_group(group_key.clone()).await.expect(GROUP_NOT_FOUND);
+    group.set_name(TEST_GROUP_NAME).await.expect(UNABLE_TO_SET_GROUP_NAME);
+    let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
+    assert_eq!(name, TEST_GROUP_NAME);
+
     d_web_backend.stop().await.expect("Unable to stop");
 }
