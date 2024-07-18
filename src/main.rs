@@ -285,7 +285,7 @@ async fn main() -> Result<()> {
             .value_name("PUBKEY")
             .help("Sets the public key for the group")
             .value_parser(clap::value_parser!(String)))
-        .arg(Arg::new("seckey")
+        .arg(Arg::new("secret")
             .long("seckey")
             .value_name("SECKEY")
             .help("Sets the secret key for the group")
