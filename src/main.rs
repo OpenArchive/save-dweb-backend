@@ -83,16 +83,25 @@ impl Group {
     pub async fn set_name(&self, name: &str) -> Result<()> {
         let routing_context = &self.routing_context;
         let key = self.dht_record.key().clone();
-        routing_context.set_dht_value(key, 0, name.as_bytes().to_vec(), None).await?;
+        
+        // Encrypt the name before setting it
+        let encrypted_name = self.encrypt_aead(name.as_bytes(), None)?;
+        
+        routing_context.set_dht_value(key, 0, encrypted_name, None).await?;
         Ok(())
     }
 
     pub async fn get_name(&self) -> Result<String> {
         let routing_context = &self.routing_context;
         let key = self.dht_record.key().clone();
+        
         let value = routing_context.get_dht_value(key, 0, false).await?;
         match value {
-            Some(value) => Ok(String::from_utf8(value.data().to_vec()).map_err(|e| anyhow!("Failed to convert DHT value to string: {}", e))?),
+            Some(value) => {
+                // Decrypt the name after retrieving it
+                let decrypted_name = self.decrypt_aead(value.data(), None)?;
+                Ok(String::from_utf8(decrypted_name).map_err(|e| anyhow!("Failed to convert DHT value to string: {}", e))?)
+            }
             None => Err(anyhow!("Value not found"))
         }
     }
