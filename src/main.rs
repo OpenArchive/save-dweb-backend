@@ -1,7 +1,9 @@
 use async_stream::stream;
 use futures_core::stream::Stream;
 use iroh::docs::store::fs::Store;
-use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config, CRYPTO_KIND_VLD0, DHTSchema, CryptoTyped, DHTRecordDescriptor, vld0_generate_keypair, KeyPair};
+use veilid_core::{
+    VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config, CRYPTO_KIND_VLD0, DHTSchema, CryptoTyped, DHTRecordDescriptor, vld0_generate_keypair, KeyPair, Nonce, SharedSecret, ProtectedStore, CryptoSystemVLD0, CryptoSystem,
+};
 use std::sync::Arc;
 use tokio::fs;
 use tracing::info;
@@ -64,6 +66,8 @@ pub struct Group {
     encryption_key: CryptoTyped<CryptoKey>,
     secret_key: Option<CryptoTyped<CryptoKey>>,
     routing_context: Arc<veilid_core::RoutingContext>, // Store the routing context here
+    nonce: Nonce,
+    crypto_system: CryptoSystemVLD0,
 }
 
 impl Group {
@@ -79,7 +83,6 @@ impl Group {
     pub fn get_encryption_key(&self) -> CryptoKey {
         self.encryption_key.value
     }
-
     pub async fn set_name(&self, name: &str) -> Result<()> {
         let routing_context = &self.routing_context;
         let key = self.dht_record.key().clone();
@@ -153,6 +156,7 @@ impl Group {
             .map_err(|e| anyhow!("Failed to decrypt data: {}", e))
     }
 
+    async fn store_keypair(&self, protected_store: &ProtectedStore) -> Result<()> {
         let keypair = GroupKeypair {
             public_key: self.id.clone(),
             secret_key: self.secret_key.as_ref().map(|sk| sk.value.clone()),
@@ -249,12 +253,16 @@ impl DWebBackend {
         let keypair = vld0_generate_keypair();
         let encryption_key = CryptoTyped::new(CRYPTO_KIND_VLD0, CryptoKey::new([0; 32]));
 
+        let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
+
         let group = Group {
             id: keypair.key.clone(),
             dht_record,
             encryption_key,
             secret_key: Some(CryptoTyped::new(CRYPTO_KIND_VLD0, keypair.secret)),
             routing_context: Arc::new(routing_context), // Store routing context in group
+            nonce: Nonce::default(),
+            crypto_system,
         };
 
         // Store the group's keypair in the protected store
@@ -296,12 +304,16 @@ impl DWebBackend {
             ).await?
         };
 
+        let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
+
         let group = Group {
             id: retrieved_keypair.public_key.clone(),
             dht_record,
             encryption_key: CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.encryption_key),
             secret_key: retrieved_keypair.secret_key.map(|sk| CryptoTyped::new(CRYPTO_KIND_VLD0, sk)),
             routing_context: Arc::new(routing_context),
+            nonce: Nonce::default(), // Replace with actual nonce initialization
+            crypto_system,
         };
 
         Ok(Box::new(group))
@@ -378,7 +390,7 @@ async fn main() -> Result<()> {
 
 #[tokio::test]
 async fn basic_test() {
-
+    
     let path = TmpDir::new("test_dweb_backend").await.unwrap();
     let port = 8080;
 
