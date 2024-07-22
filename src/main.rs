@@ -290,6 +290,11 @@ async fn main() -> Result<()> {
             .value_name("SECKEY")
             .help("Sets the secret key for the group")
             .value_parser(clap::value_parser!(String)))
+        .arg(Arg::new("encryption_key")
+            .long("enckey")
+            .value_name("ENCKEY")
+            .help("Sets the encryption key for the group")
+            .value_parser(clap::value_parser!(String)))
         .get_matches();
 
     let path = xdg::BaseDirectories::with_prefix("save-dweb-backend")?.get_data_home();
@@ -304,16 +309,19 @@ async fn main() -> Result<()> {
     d_web_backend.start().await?;
 
     // Check if keys were provided, otherwise create a new group
-    if matches.contains_id("pubkey") && matches.contains_id("seckey") {
+    if matches.contains_id("pubkey") && matches.contains_id("seckey") && matches.contains_id("enckey") {
         let pubkey = matches.get_one::<String>("pubkey").unwrap();
         let seckey = matches.get_one::<String>("seckey").unwrap();
+        let enckey = matches.get_one::<String>("enckey").unwrap();
         println!("Provided Public Key: {:?}", pubkey);
         println!("Provided Secret Key: {:?}", seckey);
+        println!("Provided Encryption Key: {:?}", enckey);
         // Use the provided keys as needed
     } else {
         let group = d_web_backend.create_group().await?;
         println!("Group created with Public Key: {:?}", group.id);
         println!("Group created with Secret Key: {:?}", group.secret_key.as_ref().unwrap().value);
+        println!("Group created with Encryption Key: {:?}", group.encryption_key.value);
     }
 
     // Stop the backend after receiving SIGINT signal.
