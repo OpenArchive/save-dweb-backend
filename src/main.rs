@@ -126,7 +126,27 @@ impl Group {
         unimplemented!("WIP")
     }
 
-    async fn store_keypair(&self, protected_store: &veilid_core::ProtectedStore) -> Result<()> {
+
+    pub fn encrypt_aead(
+        &self,
+        data: &[u8],
+        associated_data: Option<&[u8]>,
+    ) -> Result<Vec<u8>> {
+        self.crypto_system
+            .encrypt_aead(data, &self.nonce, &self.encryption_key.value, associated_data)
+            .map_err(|e| anyhow!("Failed to encrypt data: {}", e))
+    }
+
+    pub fn decrypt_aead(
+        &self,
+        data: &[u8],
+        associated_data: Option<&[u8]>,
+    ) -> Result<Vec<u8>> {
+        self.crypto_system
+            .decrypt_aead(data, &self.nonce, &self.encryption_key.value, associated_data)
+            .map_err(|e| anyhow!("Failed to decrypt data: {}", e))
+    }
+
         let keypair = GroupKeypair {
             public_key: self.id.clone(),
             secret_key: self.secret_key.as_ref().map(|sk| sk.value.clone()),
