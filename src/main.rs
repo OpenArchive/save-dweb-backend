@@ -126,6 +126,12 @@ impl Group {
         unimplemented!("WIP")
     }
 
+    pub async fn close(&self) -> Result<()> {
+        let routing_context = &self.routing_context;
+        let key = self.dht_record.key().clone();
+        routing_context.close_dht_record(key).await?;
+        Ok(())
+    }
 
     pub fn encrypt_aead(
         &self,
@@ -303,6 +309,15 @@ impl DWebBackend {
 
     pub async fn list_groups(&self) -> Result<Vec<Box<Group>>> {
         Ok(self.groups.values().cloned().collect())
+    }
+
+    pub async fn close_group(&mut self, key: CryptoKey) -> Result<()> {
+        if let Some(group) = self.groups.remove(&key) {
+            group.close().await?;
+        } else {
+            return Err(anyhow!(GROUP_NOT_FOUND));
+        }
+        Ok(())
     }
 }
 
