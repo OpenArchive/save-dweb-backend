@@ -24,6 +24,8 @@ const FAILED_TO_LOAD_KEYPAIR: &str = "Failed to load keypair";
 const KEYPAIR_NOT_FOUND: &str = "Keypair not found";
 const FAILED_TO_DESERIALIZE_KEYPAIR: &str = "Failed to deserialize keypair";
 
+const NONCE_LENGTH: usize = 24; // Correct nonce length
+
 #[derive(Serialize, Deserialize)]
 struct GroupKeypair {
     public_key: CryptoKey,
@@ -66,7 +68,6 @@ pub struct Group {
     encryption_key: CryptoTyped<CryptoKey>,
     secret_key: Option<CryptoTyped<CryptoKey>>,
     routing_context: Arc<veilid_core::RoutingContext>, // Store the routing context here
-    nonce: Nonce,
     crypto_system: CryptoSystemVLD0,
 }
 
@@ -141,9 +142,15 @@ impl Group {
         data: &[u8],
         associated_data: Option<&[u8]>,
     ) -> Result<Vec<u8>> {
-        self.crypto_system
-            .encrypt_aead(data, &self.nonce, &self.encryption_key.value, associated_data)
-            .map_err(|e| anyhow!("Failed to encrypt data: {}", e))
+        let nonce = self.crypto_system.random_nonce();
+        let mut buffer = Vec::with_capacity(nonce.as_slice().len() + data.len());
+        buffer.extend_from_slice(nonce.as_slice());
+        buffer.extend_from_slice(
+            &self.crypto_system
+                .encrypt_aead(data, &nonce, &self.encryption_key.value, associated_data)
+                .map_err(|e| anyhow!("Failed to encrypt data: {}", e))?,
+        );
+        Ok(buffer)
     }
 
     pub fn decrypt_aead(
@@ -151,8 +158,11 @@ impl Group {
         data: &[u8],
         associated_data: Option<&[u8]>,
     ) -> Result<Vec<u8>> {
+        let nonce: [u8; NONCE_LENGTH] = data[..NONCE_LENGTH].try_into().map_err(|_| anyhow!("Failed to convert nonce slice to array"))?;
+        let nonce = Nonce::new(nonce);
+        let encrypted_data = &data[NONCE_LENGTH..];
         self.crypto_system
-            .decrypt_aead(data, &self.nonce, &self.encryption_key.value, associated_data)
+            .decrypt_aead(encrypted_data, &nonce, &self.encryption_key.value, associated_data)
             .map_err(|e| anyhow!("Failed to decrypt data: {}", e))
     }
 
@@ -261,7 +271,6 @@ impl DWebBackend {
             encryption_key,
             secret_key: Some(CryptoTyped::new(CRYPTO_KIND_VLD0, keypair.secret)),
             routing_context: Arc::new(routing_context), // Store routing context in group
-            nonce: Nonce::default(),
             crypto_system,
         };
 
@@ -312,7 +321,6 @@ impl DWebBackend {
             encryption_key: CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.encryption_key),
             secret_key: retrieved_keypair.secret_key.map(|sk| CryptoTyped::new(CRYPTO_KIND_VLD0, sk)),
             routing_context: Arc::new(routing_context),
-            nonce: Nonce::default(), // Replace with actual nonce initialization
             crypto_system,
         };
 
