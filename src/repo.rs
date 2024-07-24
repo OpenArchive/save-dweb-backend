@@ -39,3 +39,9 @@ impl Repo {
         unimplemented!("WIP")
     }
 }
+
+impl Default for Repo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
