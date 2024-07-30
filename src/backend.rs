@@ -81,9 +81,10 @@ impl Backend {
 
         let dht_record = routing_context.create_dht_record(schema, kind).await?;
         let keypair = vld0_generate_keypair();
-        let encryption_key = CryptoTyped::new(CRYPTO_KIND_VLD0, CryptoKey::new([0; 32]));
-
         let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
+
+        let encryption_key = crypto_system.random_shared_secret();
+
 
         let group = Group::new(
             keypair.key.clone(),
@@ -151,4 +152,7 @@ impl Backend {
             .ok_or_else(|| anyhow!("Veilid API not initialized"))
             .map(|api| Arc::new(api.protected_store().unwrap()))
     }
+        let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
+        let encryption_key = crypto_system.random_shared_secret();
+
 }
