@@ -4,21 +4,13 @@ use serde::{Serialize, Deserialize};
 use eyre::{Result, anyhow};
 use std::sync::Arc;
 use veilid_core::{
-    CryptoKey, DHTRecordDescriptor, CryptoTyped, VeilidUpdate, VeilidConfigInner, api_startup_config, CRYPTO_KIND_VLD0, Nonce, ProtectedStore, CryptoSystemVLD0, CryptoSystem, RoutingContext, KeyPair
-};
-
-#[derive(Serialize, Deserialize)]
-pub struct GroupKeypair {
-    pub public_key: CryptoKey,
-    pub secret_key: Option<CryptoKey>,
-    pub encryption_key: CryptoKey,
-}
+    CryptoKey, DHTRecordDescriptor, CryptoTyped, CryptoSystemVLD0, RoutingContext, SharedSecret
 
 #[derive(Clone)]
 pub struct Group {
     pub id: CryptoKey,
     pub dht_record: DHTRecordDescriptor,
-    pub encryption_key: CryptoTyped<CryptoKey>,
+    pub encryption_key: SharedSecret,
     pub secret_key: Option<CryptoTyped<CryptoKey>>,
     pub routing_context: Arc<RoutingContext>,
     pub crypto_system: CryptoSystemVLD0,
@@ -28,7 +20,7 @@ impl Group {
     pub fn new(
         id: CryptoKey,
         dht_record: DHTRecordDescriptor,
-        encryption_key: CryptoTyped<CryptoKey>,
+        encryption_key: SharedSecret,
         secret_key: Option<CryptoTyped<CryptoKey>>,
         routing_context: Arc<RoutingContext>,
         crypto_system: CryptoSystemVLD0,
