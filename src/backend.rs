@@ -1,18 +1,23 @@
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
-use eyre::{Result, anyhow};
+use anyhow::{Result, anyhow};
 use tokio::fs;
 use tracing::info;
 use xdg::BaseDirectories;
-use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config, DHTSchema, CRYPTO_KIND_VLD0, vld0_generate_keypair, CryptoTyped, CryptoSystemVLD0, RoutingContext, KeyPair, ProtectedStore}; // Added ProtectedStore here
+use veilid_core::{VeilidAPI, CryptoKey, VeilidUpdate, VeilidConfigInner, api_startup_config, DHTSchema, CRYPTO_KIND_VLD0, vld0_generate_keypair, CryptoTyped, CryptoSystemVLD0, RoutingContext, KeyPair, ProtectedStore, SharedSecret, CryptoSystem};
 use std::sync::Arc;
-use crate::group::{Group, GroupKeypair};
+use crate::common::{CommonKeypair, DHTEntity};
+use crate::group::Group;
+use crate::repo::Repo;
 
 pub struct Backend {
     path: PathBuf,
     port: u16,
-    veilid_api: Option<VeilidAPI>,
+    veilid_api: Option<Arc<VeilidAPI>>,
     groups: HashMap<CryptoKey, Box<Group>>,
+    repos: HashMap<CryptoKey, Box<Repo>>,
+    routing_context: Option<Arc<RoutingContext>>,
+    crypto_system: Option<Arc<dyn CryptoSystem>>,
 }
 
 impl Backend {
@@ -22,6 +27,9 @@ impl Backend {
             port,
             veilid_api: None,
             groups: HashMap::new(),
+            repos: HashMap::new(),
+            routing_context: None,
+            crypto_system: None,
         })
     }
 
@@ -60,7 +68,9 @@ impl Backend {
             network: Default::default(),
         };
 
-        self.veilid_api = Some(api_startup_config(update_callback, config_inner).await.map_err(|e| anyhow!("Failed to initialize Veilid API: {}", e))?);
+        if self.veilid_api.is_none() {
+            self.veilid_api = Some(Arc::new(api_startup_config(update_callback, config_inner).await.map_err(|e| anyhow!("Failed to initialize Veilid API: {}", e))?));
+        }
 
         Ok(())
     }
@@ -68,7 +78,13 @@ impl Backend {
     pub async fn stop(&self) -> Result<()> {
         println!("Stopping Backend...");
         if let Some(veilid) = &self.veilid_api {
-            veilid.clone().shutdown().await;
+            if let Ok(veilid) = Arc::try_unwrap(Arc::clone(veilid)) {
+                println!("Shutting down Veilid API");
+                veilid.shutdown().await;
+                println!("Veilid API shut down successfully");
+            } else {
+                println!("Failed to unwrap Arc. There are other references to VeilidAPI.");
+            }
         }
         Ok(())
     }
@@ -96,7 +112,13 @@ impl Backend {
         );
 
         let protected_store = veilid.protected_store().unwrap();
-        group.store_keypair(&protected_store).await?;
+        CommonKeypair {
+            public_key: group.get_id(),
+            secret_key: group.get_secret_key(),
+            encryption_key: group.get_encryption_key(),
+        }
+        .store_keypair(&protected_store, &group.get_id())
+        .await.map_err(|e| anyhow!(e))?;
 
         self.groups.insert(group.get_id(), Box::new(group.clone()));
 
@@ -110,7 +132,7 @@ impl Backend {
 
         let protected_store = self.veilid_api.as_ref().unwrap().protected_store().unwrap();
         let keypair_data = protected_store.load_user_secret(key.to_string()).await.map_err(|_| anyhow!("Failed to load keypair"))?.ok_or_else(|| anyhow!("Keypair not found"))?;
-        let retrieved_keypair: GroupKeypair = serde_cbor::from_slice(&keypair_data).map_err(|_| anyhow!("Failed to deserialize keypair"))?;
+        let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data).map_err(|_| anyhow!("Failed to deserialize keypair"))?;
 
         let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
         let dht_record = if let Some(secret_key) = retrieved_keypair.secret_key.clone() {
@@ -121,14 +143,15 @@ impl Backend {
 
         let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
 
-        let group = Group::new(
-            retrieved_keypair.public_key.clone(),
+        let group = Group {
+            id: retrieved_keypair.public_key.clone(),
             dht_record,
-            CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.encryption_key),
-            retrieved_keypair.secret_key.map(|sk| CryptoTyped::new(CRYPTO_KIND_VLD0, sk)),
-            Arc::new(routing_context),
+            encryption_key: retrieved_keypair.encryption_key.clone(),
+            secret_key: retrieved_keypair.secret_key.map(|sk| CryptoTyped::new(CRYPTO_KIND_VLD0, sk)),
+            routing_context: Arc::new(routing_context),
             crypto_system,
-        );
+            repos: Vec::new(),
+        };
 
         Ok(Box::new(group))
     }
@@ -139,7 +162,7 @@ impl Backend {
 
     pub async fn close_group(&mut self, key: CryptoKey) -> Result<()> {
         if let Some(group) = self.groups.remove(&key) {
-            group.close().await?;
+            group.close().await.map_err(|e| anyhow!(e))?;
         } else {
             return Err(anyhow!("Group not found"));
         }
@@ -152,7 +175,60 @@ impl Backend {
             .ok_or_else(|| anyhow!("Veilid API not initialized"))
             .map(|api| Arc::new(api.protected_store().unwrap()))
     }
+
+    pub async fn create_repo(&mut self) -> Result<Repo> {
+        let veilid = self.veilid_api.as_ref().ok_or_else(|| anyhow!("Veilid API is not initialized"))?;
+        let routing_context = veilid.routing_context()?;
+        let schema = DHTSchema::dflt(1)?;
+        let kind = Some(CRYPTO_KIND_VLD0);
+
+        let dht_record = routing_context.create_dht_record(schema, kind).await?;
+        let keypair = vld0_generate_keypair();
         let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
         let encryption_key = crypto_system.random_shared_secret();
 
+
+        let repo = Repo::new(
+            keypair.key.clone(),
+            dht_record,
+            encryption_key,
+            Some(CryptoTyped::new(CRYPTO_KIND_VLD0, keypair.secret)),
+            Arc::new(routing_context),
+            crypto_system,
+        );
+
+        self.repos.insert(repo.get_id(), Box::new(repo.clone()));
+
+        Ok(repo)
+    }
+
+    pub async fn get_repo(&self, key: CryptoKey) -> Result<Box<Repo>> {
+        if let Some(repo) = self.repos.get(&key) {
+            return Ok(repo.clone());
+        }
+
+        let protected_store = self.veilid_api.as_ref().unwrap().protected_store().unwrap();
+        let keypair_data = protected_store.load_user_secret(key.to_string()).await.map_err(|_| anyhow!("Failed to load keypair"))?.ok_or_else(|| anyhow!("Keypair not found"))?;
+        let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data).map_err(|_| anyhow!("Failed to deserialize keypair"))?;
+
+        let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
+        let dht_record = if let Some(secret_key) = retrieved_keypair.secret_key.clone() {
+            routing_context.open_dht_record(CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.public_key.clone()), Some(KeyPair { key: retrieved_keypair.public_key.clone(), secret: secret_key })).await?
+        } else {
+            routing_context.open_dht_record(CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.public_key.clone()), None).await?
+        };
+
+        let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
+
+        let repo = Repo::new(
+            retrieved_keypair.public_key.clone(),
+            dht_record,
+            SharedSecret::new([0; 32]),
+            retrieved_keypair.secret_key.map(|sk| CryptoTyped::new(CRYPTO_KIND_VLD0, sk)),
+            Arc::new(routing_context),
+            crypto_system,
+        );
+
+        Ok(Box::new(repo))
+    }
 }
