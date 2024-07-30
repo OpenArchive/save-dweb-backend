@@ -1,16 +1,21 @@
 use clap::{Command, Arg};
-use eyre::Result;
+use anyhow::{Result, anyhow};
 use xdg::BaseDirectories;
 use tokio::fs;
 use crate::backend::Backend;
-use crate::group::GroupKeypair;
+use crate::common::{CommonKeypair, DHTEntity};
+use crate::group::Group;
+use crate::repo::Repo;
+use crate::constants::{UNABLE_TO_SET_GROUP_NAME, UNABLE_TO_GET_GROUP_NAME};
 
+mod common;
 mod group;
 mod repo;
 mod backend;
+mod constants;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     let matches = Command::new("Save DWeb Backend")
         .arg(Arg::new("pubkey")
             .long("pubkey")
@@ -38,6 +43,7 @@ async fn main() -> Result<()> {
 
     backend.start().await?;
 
+    // Check if keys were provided, otherwise create a new group
     if matches.contains_id("pubkey") && matches.contains_id("seckey") && matches.contains_id("enckey") {
         let pubkey = matches.get_one::<String>("pubkey").unwrap();
         let seckey = matches.get_one::<String>("seckey").unwrap();
@@ -48,10 +54,10 @@ async fn main() -> Result<()> {
     } else {
         let group = backend.create_group().await?;
         println!("Group created with Public Key: {:?}", group.get_id());
-        println!("Group created with Secret Key: {:?}", group.secret_key.as_ref().unwrap().value);
+        println!("Group created with Secret Key: {:?}", group.get_secret_key().unwrap());
         println!("Group created with Encryption Key: {:?}", group.get_encryption_key());
     }
-
+    // Await for ctrl-c and then stop the backend
     tokio::signal::ctrl_c().await?;
 
     backend.stop().await?;
