@@ -220,14 +220,14 @@ impl Backend {
 
         let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
 
-        let repo = Repo::new(
-            retrieved_keypair.public_key.clone(),
+        let repo = Repo {
+            id: retrieved_keypair.public_key.clone(),
             dht_record,
-            SharedSecret::new([0; 32]),
-            retrieved_keypair.secret_key.map(|sk| CryptoTyped::new(CRYPTO_KIND_VLD0, sk)),
-            Arc::new(routing_context),
+            encryption_key: SharedSecret::new([0; 32]),
+            secret_key: retrieved_keypair.secret_key.map(|sk| CryptoTyped::new(CRYPTO_KIND_VLD0, sk)),
+            routing_context: Arc::new(routing_context),
             crypto_system,
-        );
+        };
 
         Ok(Box::new(repo))
     }
