@@ -184,7 +184,7 @@ impl Backend {
 
         let protected_store = self.veilid_api.as_ref().unwrap().protected_store().unwrap();
         let keypair_data = protected_store
-            .load_user_secret(key.to_string())
+            .load_user_secret(record_key.to_string())
             .await
             .map_err(|_| anyhow!("Failed to load keypair"))?
             .ok_or_else(|| anyhow!("Keypair not found"))?;
