@@ -138,14 +138,14 @@ impl Backend {
         let routing_context = veilid.routing_context()?;
         let schema = DHTSchema::dflt(1)?;
         let kind = Some(CRYPTO_KIND_VLD0);
-
+    
         let dht_record = routing_context.create_dht_record(schema, kind).await?;
         let record_key = dht_record.key().clone();
         let keypair = vld0_generate_keypair();
         let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
-
+    
         let encryption_key = crypto_system.random_shared_secret();
-
+    
         let group = Group::new(
             keypair.key.clone(),
             record_key,
@@ -155,7 +155,7 @@ impl Backend {
             Arc::new(routing_context),
             crypto_system,
         );
-
+    
         let protected_store = veilid.protected_store().unwrap();
         CommonKeypair {
             public_key: group.get_id(),
@@ -165,9 +165,9 @@ impl Backend {
         .store_keypair(&protected_store, &group.get_id())
         .await
         .map_err(|e| anyhow!(e))?;
-
+    
         self.groups.insert(record_key.value, Box::new(group.clone()));
-
+    
         Ok(group)
     }
 
@@ -175,13 +175,13 @@ impl Backend {
         if let Some(group) = self.groups.get(&record_key.value) {
             return Ok(group.clone());
         }
-
+    
         let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
     
         let dht_record = routing_context
-            .open_dht_record(record_key.clone(), None) 
+            .open_dht_record(record_key.clone(), None)
             .await?;
-
+    
         let protected_store = self.veilid_api.as_ref().unwrap().protected_store().unwrap();
         let keypair_data = protected_store
             .load_user_secret(record_key.to_string())
@@ -192,10 +192,10 @@ impl Backend {
             .map_err(|_| anyhow!("Failed to deserialize keypair"))?;
 
         let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
-
+    
         let group = Group {
-            id: retrieved_keypair.public_key.clone(),
-            record_key,
+            id: retrieved_keypair.public_key.clone(),  
+            record_key, 
             dht_record,
             encryption_key: retrieved_keypair.encryption_key.clone(),
             secret_key: retrieved_keypair
@@ -205,7 +205,8 @@ impl Backend {
             crypto_system,
             repos: Vec::new(),
         };
-
+        self.groups.insert(record_key.value, Box::new(group.clone()));
+    
         Ok(Box::new(group))
     }
 
