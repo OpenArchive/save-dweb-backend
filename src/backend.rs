@@ -13,7 +13,7 @@ use tracing::info;
 use veilid_core::{
     api_startup_config, vld0_generate_keypair, CryptoKey, CryptoSystem, CryptoSystemVLD0,
     CryptoTyped, DHTSchema, KeyPair, ProtectedStore, RoutingContext, SharedSecret, UpdateCallback,
-    VeilidAPI, VeilidConfigInner, VeilidUpdate, CRYPTO_KIND_VLD0,
+    VeilidAPI, VeilidConfigInner, VeilidUpdate, CRYPTO_KIND_VLD0, TypedKey
 };
 use xdg::BaseDirectories;
 
@@ -171,10 +171,16 @@ impl Backend {
         Ok(group)
     }
 
-    pub async fn get_group(&self, key: CryptoKey) -> Result<Box<Group>> {
-        if let Some(group) = self.groups.get(&key) {
+    pub async fn get_group(&mut self, record_key: TypedKey) -> Result<Box<Group>> {
+        if let Some(group) = self.groups.get(&record_key.value) {
             return Ok(group.clone());
         }
+
+        let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
+    
+        let dht_record = routing_context
+            .open_dht_record(record_key.clone(), None) 
+            .await?;
 
         let protected_store = self.veilid_api.as_ref().unwrap().protected_store().unwrap();
         let keypair_data = protected_store
