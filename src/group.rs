@@ -2,7 +2,7 @@ use serde::{Serialize, Deserialize};
 use eyre::{Result, Error, anyhow};
 use std::sync::Arc;
 use veilid_core::{
-    CryptoKey, DHTRecordDescriptor, CryptoTyped, CryptoSystemVLD0, RoutingContext, SharedSecret
+    CryptoKey, DHTRecordDescriptor, CryptoTyped, CryptoSystemVLD0, RoutingContext, SharedSecret, TypedKey
 };
 
 use crate::common::DHTEntity;
@@ -11,6 +11,7 @@ use crate::repo::Repo;
 #[derive(Clone)]
 pub struct Group {
     pub id: CryptoKey,
+    pub record_key: TypedKey,
     pub dht_record: DHTRecordDescriptor,
     pub encryption_key: SharedSecret,
     pub secret_key: Option<CryptoTyped<CryptoKey>>,
@@ -22,6 +23,7 @@ pub struct Group {
 impl Group {
     pub fn new(
         id: CryptoKey,
+        record_key: TypedKey,
         dht_record: DHTRecordDescriptor,
         encryption_key: SharedSecret,
         secret_key: Option<CryptoTyped<CryptoKey>>,
@@ -30,6 +32,7 @@ impl Group {
     ) -> Self {
         Self {
             id,
+            record_key,
             dht_record,
             encryption_key,
             secret_key,
