@@ -191,28 +191,6 @@ impl Backend {
         let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data)
             .map_err(|_| anyhow!("Failed to deserialize keypair"))?;
 
-        let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
-        let dht_record = if let Some(secret_key) = retrieved_keypair.secret_key.clone() {
-            routing_context
-                .open_dht_record(
-                    CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.public_key.clone()),
-                    Some(KeyPair {
-                        key: retrieved_keypair.public_key.clone(),
-                        secret: secret_key,
-                    }),
-                )
-                .await?
-        } else {
-            routing_context
-                .open_dht_record(
-                    CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.public_key.clone()),
-                    None,
-                )
-                .await?
-        };
-
-        let record_key = dht_record.key().clone();
-
         let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
 
         let group = Group {
