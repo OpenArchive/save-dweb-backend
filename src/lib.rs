@@ -28,7 +28,9 @@ mod tests {
         backend.start().await.expect("Unable to start");
         let group = backend.create_group().await.expect("Unable to create group");
 
-        let group_key = group.get_id();
+        let group_key = group.get_id();  
+        let record_key = group.record_key.clone();
+
         group.set_name(TEST_GROUP_NAME).await.expect(UNABLE_TO_SET_GROUP_NAME);
         let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
         assert_eq!(name, TEST_GROUP_NAME);
@@ -36,7 +38,7 @@ mod tests {
         backend.stop().await.expect("Unable to stop");
 
         backend.start().await.expect("Unable to restart");
-        let loaded_group = backend.get_group(group_key.clone()).await.expect(GROUP_NOT_FOUND);
+        let loaded_group = backend.get_group(record_key.clone()).await.expect(GROUP_NOT_FOUND);
 
         let protected_store = backend.get_protected_store().unwrap();
         let keypair_data = protected_store.load_user_secret(group.get_id().to_string()).await.expect(FAILED_TO_LOAD_KEYPAIR).expect(KEYPAIR_NOT_FOUND);
@@ -46,7 +48,7 @@ mod tests {
         assert_eq!(retrieved_keypair.secret_key, group.get_secret_key());
         assert_eq!(retrieved_keypair.encryption_key, group.get_encryption_key());
 
-        let mut loaded_group = backend.get_group(group.get_id()).await.expect(GROUP_NOT_FOUND);
+        let mut loaded_group = backend.get_group(record_key.clone()).await.expect(GROUP_NOT_FOUND);
 
         // Check if we can get group name
         let group_name = loaded_group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
@@ -70,7 +72,7 @@ mod tests {
         // List known repos
         let repos = loaded_group.list_repos().await;
         assert!(repos.contains(&repo_key));
-  
+
         // Retrieve repo by key
         let loaded_repo = backend.get_repo(repo_key.clone()).await.expect("Repo not found");
 
@@ -80,5 +82,5 @@ mod tests {
 
         backend.stop().await.expect("Unable to stop");
     }
-      
+    
 }
