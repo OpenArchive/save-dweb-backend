@@ -63,7 +63,7 @@ impl Group {
 
 impl DHTEntity for Group {
     fn get_id(&self) -> CryptoKey {
-        self.record_key.value
+        self.id.clone()
     }
 
     fn get_encryption_key(&self) -> SharedSecret {
