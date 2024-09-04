@@ -54,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         let group = backend.create_group().await?;
         println!("Group created with Public Key: {:?}", group.get_id());
+        println!("Group created with Record Key: {:?}", group.record_key);
         println!("Group created with Secret Key: {:?}", group.get_secret_key().unwrap());
         println!("Group created with Encryption Key: {:?}", group.get_encryption_key());
     }
