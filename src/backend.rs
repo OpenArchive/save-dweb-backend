@@ -119,7 +119,7 @@ impl Backend {
 
     pub async fn stop(&mut self) -> Result<()> {
         println!("Stopping Backend...");
-        if (self.veilid_api.is_some()) {
+        if self.veilid_api.is_some() {
             println!("Shutting down Veilid API");
             let veilid = mem::replace(&mut self.veilid_api, None);
             veilid.unwrap().shutdown().await;
