@@ -166,7 +166,7 @@ impl Backend {
         .await
         .map_err(|e| anyhow!(e))?;
 
-        self.groups.insert(group.get_id(), Box::new(group.clone()));
+        self.groups.insert(record_key.value, Box::new(group.clone()));
 
         Ok(group)
     }
