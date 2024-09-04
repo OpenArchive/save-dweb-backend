@@ -140,6 +140,7 @@ impl Backend {
         let kind = Some(CRYPTO_KIND_VLD0);
 
         let dht_record = routing_context.create_dht_record(schema, kind).await?;
+        let record_key = dht_record.key().clone();
         let keypair = vld0_generate_keypair();
         let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
 
@@ -147,6 +148,7 @@ impl Backend {
 
         let group = Group::new(
             keypair.key.clone(),
+            record_key,
             dht_record,
             encryption_key,
             Some(CryptoTyped::new(CRYPTO_KIND_VLD0, keypair.secret)),
@@ -203,10 +205,13 @@ impl Backend {
                 .await?
         };
 
+        let record_key = dht_record.key().clone();
+
         let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
 
         let group = Group {
             id: retrieved_keypair.public_key.clone(),
+            record_key,
             dht_record,
             encryption_key: retrieved_keypair.encryption_key.clone(),
             secret_key: retrieved_keypair
