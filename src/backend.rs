@@ -183,9 +183,6 @@ impl Backend {
         let retrieved_keypair = CommonKeypair::load_keypair(&protected_store, &record_key.value)
             .await
             .map_err(|_| anyhow!("Failed to load keypair"))?;
-    
-        let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data)
-            .map_err(|_| anyhow!("Failed to deserialize keypair"))?;
 
         let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
     
