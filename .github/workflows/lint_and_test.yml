@@ -26,4 +26,6 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run tests
+        env:
+          RUST_MIN_STACK: 8388608
         run: cargo test --verbose
