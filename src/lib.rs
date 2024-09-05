@@ -41,7 +41,10 @@ mod tests {
         let loaded_group = backend.get_group(record_key.clone()).await.expect(GROUP_NOT_FOUND);
 
         let protected_store = backend.get_protected_store().unwrap();
-        let keypair_data = protected_store.load_user_secret(group.get_id().to_string()).await.expect(FAILED_TO_LOAD_KEYPAIR).expect(KEYPAIR_NOT_FOUND);
+        let keypair_data = protected_store.load_user_secret(record_key.value.to_string())
+            .await
+            .expect(FAILED_TO_LOAD_KEYPAIR)
+            .expect(KEYPAIR_NOT_FOUND);
         let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data).expect(FAILED_TO_DESERIALIZE_KEYPAIR);
 
         assert_eq!(retrieved_keypair.public_key, group.get_id());
