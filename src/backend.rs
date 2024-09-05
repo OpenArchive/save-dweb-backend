@@ -162,7 +162,7 @@ impl Backend {
             secret_key: group.get_secret_key(),
             encryption_key: group.get_encryption_key(),
         }
-        .store_keypair(&protected_store, &group.get_id())
+        .store_keypair(&protected_store, &record_key.value)
         .await
         .map_err(|e| anyhow!(e))?;
     
