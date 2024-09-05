@@ -177,21 +177,31 @@ impl Backend {
         }
     
         let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
-    
-        let dht_record = routing_context
-            .open_dht_record(record_key.clone(), None)
-            .await?;
-    
         let protected_store = self.veilid_api.as_ref().unwrap().protected_store().unwrap();
-        let keypair_data = protected_store
-            .load_user_secret(record_key.to_string())
+    
+        // Load the keypair associated with the record_key from the protected store
+        let retrieved_keypair = CommonKeypair::load_keypair(&protected_store, &record_key.value)
             .await
-            .map_err(|_| anyhow!("Failed to load keypair"))?
-            .ok_or_else(|| anyhow!("Keypair not found"))?;
+            .map_err(|_| anyhow!("Failed to load keypair"))?;
+    
         let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data)
             .map_err(|_| anyhow!("Failed to deserialize keypair"))?;
 
         let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
+    
+        // First open the DHT record
+        let dht_record = routing_context
+            .open_dht_record(record_key.clone(), None) // Don't pass a writer here yet
+            .await?;
+        
+        // Use the owner key from the DHT record as the default writer
+        let owner_key = dht_record.owner(); // Call the owner() method to get the owner key
+    
+        // Reopen the DHT record with the owner key as the writer
+        let dht_record = routing_context
+            .open_dht_record(record_key.clone(), Some(KeyPair::new(owner_key.clone(), retrieved_keypair.secret_key.clone().unwrap())))
+            .await?;
+    
     
         let group = Group {
             id: retrieved_keypair.public_key.clone(),  
