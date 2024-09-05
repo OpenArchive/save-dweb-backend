@@ -139,33 +139,29 @@ impl Backend {
         let kind = Some(CRYPTO_KIND_VLD0);
     
         let dht_record = routing_context.create_dht_record(schema, kind).await?;
-        let record_key = dht_record.key().clone();
         let keypair = vld0_generate_keypair();
         let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
     
         let encryption_key = crypto_system.random_shared_secret();
     
         let group = Group::new(
-            keypair.key.clone(),
-            record_key,
             dht_record,
             encryption_key,
-            Some(CryptoTyped::new(CRYPTO_KIND_VLD0, keypair.secret)),
             Arc::new(routing_context),
             crypto_system,
         );
     
         let protected_store = veilid.protected_store().unwrap();
         CommonKeypair {
-            public_key: group.get_id(),
+            public_key: group.id(),
             secret_key: group.get_secret_key(),
             encryption_key: group.get_encryption_key(),
         }
-        .store_keypair(&protected_store, &record_key.value)
+        .store_keypair(&protected_store, &group.id())
         .await
         .map_err(|e| anyhow!(e))?;
     
-        self.groups.insert(record_key.value, Box::new(group.clone()));
+        self.groups.insert(group.id(), Box::new(group.clone()));
     
         Ok(group)
     }
@@ -200,18 +196,13 @@ impl Backend {
     
     
         let group = Group {
-            id: retrieved_keypair.public_key.clone(),  
-            record_key, 
-            dht_record,
+            dht_record: dht_record.clone(),
             encryption_key: retrieved_keypair.encryption_key.clone(),
-            secret_key: retrieved_keypair
-                .secret_key
-                .map(|sk| CryptoTyped::new(CRYPTO_KIND_VLD0, sk)),
             routing_context: Arc::new(routing_context),
             crypto_system,
             repos: Vec::new(),
         };
-        self.groups.insert(record_key.value, Box::new(group.clone()));
+        self.groups.insert(group.id(), Box::new(group.clone()));
     
         Ok(Box::new(group))
     }
