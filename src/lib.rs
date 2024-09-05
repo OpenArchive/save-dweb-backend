@@ -8,7 +8,9 @@ use crate::constants::{GROUP_NOT_FOUND, UNABLE_TO_SET_GROUP_NAME, UNABLE_TO_GET_
 
 use crate::backend::Backend;
 use crate::common::{CommonKeypair, DHTEntity};
-use veilid_core::vld0_generate_keypair;
+use veilid_core::{
+    vld0_generate_keypair, TypedKey, CRYPTO_KIND_VLD0
+};
 
 #[cfg(test)]
 mod tests {
@@ -28,9 +30,6 @@ mod tests {
         backend.start().await.expect("Unable to start");
         let group = backend.create_group().await.expect("Unable to create group");
 
-        let group_key = group.get_id();  
-        let record_key = group.record_key.clone();
-
         group.set_name(TEST_GROUP_NAME).await.expect(UNABLE_TO_SET_GROUP_NAME);
         let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
         assert_eq!(name, TEST_GROUP_NAME);
@@ -38,26 +37,26 @@ mod tests {
         backend.stop().await.expect("Unable to stop");
 
         backend.start().await.expect("Unable to restart");
-        let loaded_group = backend.get_group(record_key.clone()).await.expect(GROUP_NOT_FOUND);
+        let loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND);
 
         let protected_store = backend.get_protected_store().unwrap();
-        let keypair_data = protected_store.load_user_secret(record_key.value.to_string())
+        let keypair_data = protected_store.load_user_secret(group.id().to_string())
             .await
             .expect(FAILED_TO_LOAD_KEYPAIR)
             .expect(KEYPAIR_NOT_FOUND);
         let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data).expect(FAILED_TO_DESERIALIZE_KEYPAIR);
 
-        assert_eq!(retrieved_keypair.public_key, group.get_id());
+        assert_eq!(retrieved_keypair.public_key, group.id());
         assert_eq!(retrieved_keypair.secret_key, group.get_secret_key());
         assert_eq!(retrieved_keypair.encryption_key, group.get_encryption_key());
 
-        let mut loaded_group = backend.get_group(record_key.clone()).await.expect(GROUP_NOT_FOUND);
+        let mut loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND);
 
         // Check if we can get group name
         let group_name = loaded_group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
         assert_eq!(group_name, TEST_GROUP_NAME);
 
-        assert_eq!(loaded_group.get_id(), retrieved_keypair.public_key);
+        assert_eq!(loaded_group.id(), retrieved_keypair.public_key);
 
         // Create a repo
         let repo = backend.create_repo().await.expect("Unable to create repo");
