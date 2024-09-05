@@ -10,11 +10,8 @@ use crate::repo::Repo;
 
 #[derive(Clone)]
 pub struct Group {
-    pub id: CryptoKey,
-    pub record_key: TypedKey,
     pub dht_record: DHTRecordDescriptor,
     pub encryption_key: SharedSecret,
-    pub secret_key: Option<CryptoTyped<CryptoKey>>,
     pub routing_context: Arc<RoutingContext>,
     pub crypto_system: CryptoSystemVLD0,
     pub repos: Vec<Repo>,
@@ -22,26 +19,31 @@ pub struct Group {
 
 impl Group {
     pub fn new(
-        id: CryptoKey,
-        record_key: TypedKey,
         dht_record: DHTRecordDescriptor,
         encryption_key: SharedSecret,
-        secret_key: Option<CryptoTyped<CryptoKey>>,
         routing_context: Arc<RoutingContext>,
         crypto_system: CryptoSystemVLD0,
     ) -> Self {
         Self {
-            id,
-            record_key,
             dht_record,
             encryption_key,
-            secret_key,
             routing_context,
             crypto_system,
             repos: Vec::new(), 
         }
     }
 
+    pub fn id(&self) -> CryptoKey {
+        self.dht_record.key().value.clone()
+    }
+
+    pub fn owner_key(&self) -> CryptoKey {
+        self.dht_record.owner().clone()
+    }
+
+    pub fn owner_secret(&self) -> Option<CryptoKey> {
+        self.dht_record.owner_secret().cloned()
+    }
     
     pub async fn add_repo(&mut self, repo: Repo) -> Result<()> {
         self.repos.push(repo);
@@ -63,7 +65,7 @@ impl Group {
 
 impl DHTEntity for Group {
     fn get_id(&self) -> CryptoKey {
-        self.id.clone()
+        self.id().clone()
     }
 
     fn get_encryption_key(&self) -> SharedSecret {
@@ -83,6 +85,6 @@ impl DHTEntity for Group {
     }
 
     fn get_secret_key(&self) -> Option<CryptoKey> {
-        self.secret_key.clone().map(|key| key.value)
+        self.owner_secret()
     }
 }
