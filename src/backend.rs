@@ -61,9 +61,8 @@ impl Backend {
                     println!("Public internet ready!");
                     let tx = tx.clone();
                     tokio::spawn(async move {
-                        if let Err(_) = tx.send(()).await {
+                        if tx.send(()).await.is_err() {
                             println!("receiver dropped");
-                            return;
                         }
                     });
                 }
@@ -121,7 +120,7 @@ impl Backend {
         println!("Stopping Backend...");
         if self.veilid_api.is_some() {
             println!("Shutting down Veilid API");
-            let veilid = mem::replace(&mut self.veilid_api, None);
+            let veilid = self.veilid_api.take();
             veilid.unwrap().shutdown().await;
             println!("Veilid API shut down successfully");
             self.groups = HashMap::new();
