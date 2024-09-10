@@ -18,9 +18,9 @@ pub struct CommonKeypair {
 }
 
 impl CommonKeypair {
-    pub async fn store_keypair(&self, protected_store: &ProtectedStore, id: &CryptoKey) -> Result<()> {
+    pub async fn store_keypair(&self, protected_store: &ProtectedStore) -> Result<()> {
         let keypair_data = serde_cbor::to_vec(&self).map_err(|e| anyhow!("Failed to serialize keypair: {}", e))?;
-        protected_store.save_user_secret(id.to_string(), &keypair_data).await.map_err(|e| anyhow!("Unable to store keypair: {}", e))?;
+        protected_store.save_user_secret(self.id.to_string(), &keypair_data).await.map_err(|e| anyhow!("Unable to store keypair: {}", e))?;
         Ok(())
     }
 
