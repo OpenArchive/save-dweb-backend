@@ -11,6 +11,7 @@ use veilid_core::{
 
 #[derive(Serialize, Deserialize)]
 pub struct CommonKeypair {
+    pub id: CryptoKey,
     pub public_key: CryptoKey,
     pub secret_key: Option<CryptoKey>,
     pub encryption_key: SharedSecret,
