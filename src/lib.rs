@@ -46,7 +46,13 @@ mod tests {
             .expect(KEYPAIR_NOT_FOUND);
         let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data).expect(FAILED_TO_DESERIALIZE_KEYPAIR);
 
-        assert_eq!(retrieved_keypair.public_key, group.id());
+        // Check that the id matches group.id()
+        assert_eq!(retrieved_keypair.id, group.id());
+        
+        // Check that the public_key matches the owner public key from the DHT record
+        assert_eq!(retrieved_keypair.public_key, loaded_group.get_dht_record().owner().clone());
+
+        // Check that the secret and encryption keys match
         assert_eq!(retrieved_keypair.secret_key, group.get_secret_key());
         assert_eq!(retrieved_keypair.encryption_key, group.get_encryption_key());
 
@@ -56,7 +62,8 @@ mod tests {
         let group_name = loaded_group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
         assert_eq!(group_name, TEST_GROUP_NAME);
 
-        assert_eq!(loaded_group.id(), retrieved_keypair.public_key);
+        // Compare the loaded group's id with the retrieved id
+        assert_eq!(loaded_group.id(), retrieved_keypair.id);
 
         // Create a repo
         let repo = backend.create_repo().await.expect("Unable to create repo");
@@ -84,5 +91,5 @@ mod tests {
 
         backend.stop().await.expect("Unable to stop");
     }
-    
+
 }
