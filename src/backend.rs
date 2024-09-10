@@ -145,7 +145,7 @@ impl Backend {
         let encryption_key = crypto_system.random_shared_secret();
     
         let group = Group::new(
-            dht_record,
+            dht_record.clone(),
             encryption_key,
             Arc::new(routing_context),
             crypto_system,
@@ -153,11 +153,12 @@ impl Backend {
     
         let protected_store = veilid.protected_store().unwrap();
         CommonKeypair {
-            public_key: group.id(),
+            id: group.id(), 
+            public_key: dht_record.owner().clone(),  
             secret_key: group.get_secret_key(),
             encryption_key: group.get_encryption_key(),
         }
-        .store_keypair(&protected_store, &group.id())
+        .store_keypair(&protected_store)
         .await
         .map_err(|e| anyhow!(e))?;
     
