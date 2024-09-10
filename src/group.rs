@@ -1,134 +1,90 @@
-use async_stream::stream;
-use futures_core::stream::Stream;
 use serde::{Serialize, Deserialize};
-use eyre::{Result, anyhow};
+use eyre::{Result, Error, anyhow};
 use std::sync::Arc;
 use veilid_core::{
-    CryptoKey, DHTRecordDescriptor, CryptoTyped, VeilidUpdate, VeilidConfigInner, api_startup_config, CRYPTO_KIND_VLD0, Nonce, ProtectedStore, CryptoSystemVLD0, CryptoSystem, RoutingContext, KeyPair
+    CryptoKey, DHTRecordDescriptor, CryptoTyped, CryptoSystemVLD0, RoutingContext, SharedSecret, TypedKey
 };
 
-#[derive(Serialize, Deserialize)]
-pub struct GroupKeypair {
-    pub public_key: CryptoKey,
-    pub secret_key: Option<CryptoKey>,
-    pub encryption_key: CryptoKey,
-}
+use crate::common::DHTEntity;
+use crate::repo::Repo;
 
 #[derive(Clone)]
 pub struct Group {
-    pub id: CryptoKey,
     pub dht_record: DHTRecordDescriptor,
-    pub encryption_key: CryptoTyped<CryptoKey>,
-    pub secret_key: Option<CryptoTyped<CryptoKey>>,
+    pub encryption_key: SharedSecret,
     pub routing_context: Arc<RoutingContext>,
     pub crypto_system: CryptoSystemVLD0,
+    pub repos: Vec<Repo>,
 }
 
 impl Group {
     pub fn new(
-        id: CryptoKey,
         dht_record: DHTRecordDescriptor,
-        encryption_key: CryptoTyped<CryptoKey>,
-        secret_key: Option<CryptoTyped<CryptoKey>>,
+        encryption_key: SharedSecret,
         routing_context: Arc<RoutingContext>,
         crypto_system: CryptoSystemVLD0,
     ) -> Self {
         Self {
-            id,
             dht_record,
             encryption_key,
-            secret_key,
             routing_context,
             crypto_system,
+            repos: Vec::new(), 
         }
     }
 
-    pub fn get_id(&self) -> CryptoKey {
-        self.id.clone()
+    pub fn id(&self) -> CryptoKey {
+        self.dht_record.key().value.clone()
     }
 
-    pub fn get_write_key(&self) -> Option<CryptoKey> {
-        unimplemented!("WIP")
+    pub fn owner_key(&self) -> CryptoKey {
+        self.dht_record.owner().clone()
     }
 
-    pub fn get_encryption_key(&self) -> CryptoKey {
-        self.encryption_key.value
+    pub fn owner_secret(&self) -> Option<CryptoKey> {
+        self.dht_record.owner_secret().cloned()
     }
-
-    pub async fn set_name(&self, name: &str) -> Result<()> {
-        let routing_context = &self.routing_context;
-        let key = self.dht_record.key().clone();
-        let encrypted_name = self.encrypt_aead(name.as_bytes(), None)?;
-        routing_context.set_dht_value(key, 0, encrypted_name, None).await?;
+    
+    pub async fn add_repo(&mut self, repo: Repo) -> Result<()> {
+        self.repos.push(repo);
         Ok(())
     }
 
-    pub async fn get_name(&self) -> Result<String> {
-        let routing_context = &self.routing_context;
-        let key = self.dht_record.key().clone();
-        let value = routing_context.get_dht_value(key, 0, false).await?;
-        match value {
-            Some(value) => {
-                let decrypted_name = self.decrypt_aead(value.data(), None)?;
-                Ok(String::from_utf8(decrypted_name).map_err(|e| anyhow!("Failed to convert DHT value to string: {}", e))?)
-            }
-            None => Err(anyhow!("Value not found")),
+    pub async fn list_repos(&self) -> Vec<CryptoKey> {
+        self.repos.iter().map(|repo| repo.get_id()).collect()
+    }
+
+    pub async fn get_repo_name(&self, repo_key: CryptoKey) -> Result<String> {
+        if let Some(repo) = self.repos.iter().find(|repo| repo.get_id() == repo_key) {
+            repo.get_name().await
+        } else {
+            Err(anyhow!("Repo not found"))
         }
     }
+}
 
-    pub async fn name(&self) -> Result<String> {
-        self.get_name().await
+impl DHTEntity for Group {
+    fn get_id(&self) -> CryptoKey {
+        self.id().clone()
     }
 
-    pub async fn members(&self) -> Result<Vec<CryptoKey>> {
-        unimplemented!("WIP")
+    fn get_encryption_key(&self) -> SharedSecret {
+        self.encryption_key.clone()
     }
 
-    pub async fn join(&self) -> Result<()> {
-        unimplemented!("WIP")
+    fn get_routing_context(&self) -> Arc<RoutingContext> {
+        self.routing_context.clone()
     }
 
-    pub async fn leave(&self) -> Result<()> {
-        unimplemented!("WIP")
+    fn get_crypto_system(&self) -> CryptoSystemVLD0 {
+        self.crypto_system.clone()
     }
 
-    pub async fn close(&self) -> Result<()> {
-        let routing_context = &self.routing_context;
-        let key = self.dht_record.key().clone();
-        routing_context.close_dht_record(key).await?;
-        Ok(())
+    fn get_dht_record(&self) -> DHTRecordDescriptor {
+        self.dht_record.clone()
     }
 
-    pub fn encrypt_aead(&self, data: &[u8], associated_data: Option<&[u8]>) -> Result<Vec<u8>> {
-        let nonce = self.crypto_system.random_nonce();
-        let mut buffer = Vec::with_capacity(nonce.as_slice().len() + data.len());
-        buffer.extend_from_slice(nonce.as_slice());
-        buffer.extend_from_slice(
-            &self
-                .crypto_system
-                .encrypt_aead(data, &nonce, &self.encryption_key.value, associated_data)
-                .map_err(|e| anyhow!("Failed to encrypt data: {}", e))?,
-        );
-        Ok(buffer)
-    }
-
-    pub fn decrypt_aead(&self, data: &[u8], associated_data: Option<&[u8]>) -> Result<Vec<u8>> {
-        let nonce: [u8; 24] = data[..24].try_into().map_err(|_| anyhow!("Failed to convert nonce slice to array"))?;
-        let nonce = Nonce::new(nonce);
-        let encrypted_data = &data[24..];
-        self.crypto_system
-            .decrypt_aead(encrypted_data, &nonce, &self.encryption_key.value, associated_data)
-            .map_err(|e| anyhow!("Failed to decrypt data: {}", e))
-    }
-
-    pub async fn store_keypair(&self, protected_store: &ProtectedStore) -> Result<()> {
-        let keypair = GroupKeypair {
-            public_key: self.id.clone(),
-            secret_key: self.secret_key.as_ref().map(|sk| sk.value.clone()),
-            encryption_key: self.encryption_key.value.clone(),
-        };
-        let keypair_data = serde_cbor::to_vec(&keypair).map_err(|e| anyhow!("Failed to serialize keypair: {}", e))?;
-        protected_store.save_user_secret(self.id.to_string(), &keypair_data).await.map_err(|e| anyhow!("Unable to store keypair: {}", e))?;
-        Ok(())
+    fn get_secret_key(&self) -> Option<CryptoKey> {
+        self.owner_secret()
     }
 }

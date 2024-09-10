@@ -4,13 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-async-stream = "0.3.5"
-futures-core = "0.3.30"
-futures-util = "0.3.30"
-iroh = "0.17.0"
-tokio = { version = "1", features = ["full"] }
-tokio-stream = "0.1.15"
-veilid-core = "0.3.3"
+iroh-blobs = "0.23.0"
+veilid-core = { git = "https://gitlab.com/veilid/veilid.git", version = "0.3.4" }
 eyre = "0.6"
 tracing = "0.1"
 xdg = "2.4"
@@ -18,3 +13,7 @@ tmpdir = "1"
 serde = "1.0.204"
 serde_cbor = "0.11.2"
 clap = "4.5.9"
+anyhow = "1.0.86"
+tokio = {version ="1.39.3", features=["full"] }
+async-stream = "0.3.5"
+futures-core = "0.3.30"
