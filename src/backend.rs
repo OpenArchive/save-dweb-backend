@@ -135,7 +135,7 @@ impl Backend {
             .as_ref()
             .ok_or_else(|| anyhow!("Veilid API is not initialized"))?;
         let routing_context = veilid.routing_context()?;
-        let schema = DHTSchema::dflt(1)?;
+        let schema = DHTSchema::dflt(3)?;
         let kind = Some(CRYPTO_KIND_VLD0);
     
         let dht_record = routing_context.create_dht_record(schema, kind).await?;
