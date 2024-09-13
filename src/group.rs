@@ -121,6 +121,26 @@ impl Group {
     }
     
 
+    // Send an AppMessage to the repo owner using the stored route ID blob
+    pub async fn send_message_to_owner(&self, veilid: &VeilidAPI, message: Vec<u8>) -> Result<()> {
+        let routing_context = &self.routing_context;
+    
+        // Retrieve the route ID blob from DHT
+        let route_id_blob = self.get_route_id_from_dht().await?;
+    
+        // Import the route using the blob via VeilidAPI
+        let route_id = veilid.import_remote_private_route(route_id_blob)?;
+    
+        // Send an AppMessage to the repo owner using the imported route ID
+        routing_context
+            .app_message(veilid_core::Target::PrivateRoute(route_id), message)
+            .await?;
+    
+        Ok(())
+    }
+
+}
+
 impl DHTEntity for Group {
     fn get_id(&self) -> CryptoKey {
         self.id().clone()
