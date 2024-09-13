@@ -89,6 +89,17 @@ mod tests {
         let retrieved_name = loaded_repo.get_name().await.expect("Unable to get repo name after restart");
         assert_eq!(retrieved_name, repo_name);
 
+        // Generate a mock route_id_blob for testing
+        let route_id_blob = vec![1, 2, 3, 4, 5]; // Replace with real blob later
+    
+        // Test storing route_id_blob in DHT
+        loaded_group.store_route_id_in_dht(route_id_blob.clone()).await.expect("Failed to store route ID blob in DHT");
+    
+        // Verify that the DHT contains the stored route ID blob
+        let stored_blob = loaded_group.get_route_id_from_dht().await.expect("Failed to read route ID from DHT");
+
+        assert_eq!(stored_blob, route_id_blob);
+
         backend.stop().await.expect("Unable to stop");
     }
 
