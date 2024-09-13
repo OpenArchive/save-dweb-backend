@@ -13,7 +13,7 @@ use tracing::info;
 use veilid_core::{
     api_startup_config, vld0_generate_keypair, CryptoKey, CryptoSystem, CryptoSystemVLD0,
     CryptoTyped, DHTSchema, KeyPair, ProtectedStore, RoutingContext, SharedSecret, UpdateCallback,
-    VeilidAPI, VeilidConfigInner, VeilidUpdate, CRYPTO_KIND_VLD0, TypedKey
+    VeilidAPI, VeilidConfigInner, VeilidUpdate, CRYPTO_KIND_VLD0, TypedKey, VeilidConfigProtectedStore
 };
 use xdg::BaseDirectories;
 
@@ -128,7 +128,7 @@ impl Backend {
         }
         Ok(())
     }
-
+    
     pub async fn create_group(&mut self) -> Result<Group> {
         let veilid = self
             .veilid_api
