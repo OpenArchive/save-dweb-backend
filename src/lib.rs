@@ -9,13 +9,14 @@ use crate::constants::{GROUP_NOT_FOUND, UNABLE_TO_SET_GROUP_NAME, UNABLE_TO_GET_
 use crate::backend::Backend;
 use crate::common::{CommonKeypair, DHTEntity};
 use veilid_core::{
-    vld0_generate_keypair, TypedKey, CRYPTO_KIND_VLD0
+    vld0_generate_keypair, TypedKey, CRYPTO_KIND_VLD0, VeilidUpdate, VALID_CRYPTO_KINDS
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::fs;
+    use tokio::sync::mpsc;    
     use tmpdir::TmpDir;
 
     #[tokio::test]
@@ -37,7 +38,7 @@ mod tests {
         backend.stop().await.expect("Unable to stop");
 
         backend.start().await.expect("Unable to restart");
-        let loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND);
+        let mut loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND);
 
         let protected_store = backend.get_protected_store().unwrap();
         let keypair_data = protected_store.load_user_secret(group.id().to_string())
@@ -55,8 +56,6 @@ mod tests {
         // Check that the secret and encryption keys match
         assert_eq!(retrieved_keypair.secret_key, group.get_secret_key());
         assert_eq!(retrieved_keypair.encryption_key, group.get_encryption_key());
-
-        let mut loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND);
 
         // Check if we can get group name
         let group_name = loaded_group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
@@ -76,7 +75,7 @@ mod tests {
         assert_eq!(name, repo_name);
 
         // Add repo to group
-        loaded_group.add_repo(repo).await.expect("Unable to add repo to group");
+        loaded_group.add_repo(repo.clone()).await.expect("Unable to add repo to group");
 
         // List known repos
         let repos = loaded_group.list_repos().await;
@@ -89,16 +88,61 @@ mod tests {
         let retrieved_name = loaded_repo.get_name().await.expect("Unable to get repo name after restart");
         assert_eq!(retrieved_name, repo_name);
 
-        // Generate a mock route_id_blob for testing
-        let route_id_blob = vec![1, 2, 3, 4, 5]; // Replace with real blob later
-    
-        // Test storing route_id_blob in DHT
-        loaded_group.store_route_id_in_dht(route_id_blob.clone()).await.expect("Failed to store route ID blob in DHT");
-    
-        // Verify that the DHT contains the stored route ID blob
-        let stored_blob = loaded_group.get_route_id_from_dht().await.expect("Failed to read route ID from DHT");
+        // Get the update receiver from the backend
+        let update_rx = backend
+            .get_update_receiver()
+            .expect("Failed to get update receiver");
 
-        assert_eq!(stored_blob, route_id_blob);
+        // Set up a channel to receive AppMessage updates
+        let (message_tx, mut message_rx) = mpsc::channel(1);
+
+        // Spawn a task to listen for updates
+        tokio::spawn(async move {
+            let mut rx = update_rx.lock().await;
+            while let Some(update) = rx.recv().await {
+                if let VeilidUpdate::AppMessage(app_message) = update {
+                    // Optionally, filter by route_id or other criteria
+                    message_tx.send(app_message).await.unwrap();
+                }
+            }
+        });
+
+        // Get VeilidAPI instance from backend
+        let veilid_api = backend.get_veilid_api().expect("Failed to get VeilidAPI instance");
+
+        // Define the subkey
+        let subkey = 2u32;
+
+        // Create a new private route
+        let (route_id, route_id_blob) = veilid_api
+            .new_custom_private_route(
+                &VALID_CRYPTO_KINDS,
+                veilid_core::Stability::Reliable,
+                veilid_core::Sequencing::PreferOrdered,
+            )
+            .await
+            .expect("Failed to create route");
+
+        // Store the route_id_blob in DHT
+        loaded_repo
+            .store_route_id_in_dht(subkey, route_id_blob.clone())
+            .await
+            .expect("Failed to store route ID blob in DHT");
+
+        // Define the message to send
+        let message = b"Test Message to Repo Owner".to_vec();
+
+        // Send the message
+        loaded_repo
+            .send_message_to_owner(veilid_api, message.clone(), subkey)
+            .await
+            .expect("Failed to send message to repo owner");
+
+        // Receive the message
+        let received_app_message = message_rx.recv().await.expect("Failed to receive message");
+
+        // Verify the message
+        assert_eq!(received_app_message.message(), message.as_slice());
 
         backend.stop().await.expect("Unable to stop");
     }
