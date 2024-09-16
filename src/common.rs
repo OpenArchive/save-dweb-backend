@@ -109,7 +109,7 @@ pub trait DHTEntity {
         let dht_record = self.get_dht_record();
         routing_context.set_dht_value(
                 dht_record.key().clone(),
-                subkey.into(),
+                subkey,
                 route_id_blob,
                 None,
             )
