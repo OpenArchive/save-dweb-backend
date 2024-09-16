@@ -100,59 +100,34 @@ pub trait DHTEntity {
         Ok(())
     }
 
-     // Common methods for DHT operations
-    async fn store_route_id_in_dht(&self, subkey: u32, route_id_blob: Vec<u8>) -> Result<()> {
+     async fn store_route_id_in_dht(
+        &self,
+        subkey: u32,
+        route_id_blob: Vec<u8>,
+    ) -> Result<()> {
         let routing_context = &self.get_routing_context();
-    
-        println!("Attempting to open DHT record...");
-    
-        // Open the DHT record using the group's DHT record
-        let dht_record = routing_context
-            .open_dht_record(self.get_dht_record().key().clone(), self.owner_secret().map(|secret| KeyPair::new(self.owner_key(), secret)))
+        let dht_record = self.get_dht_record();
+        routing_context.set_dht_value(
+                dht_record.key().clone(),
+                subkey.into(),
+                route_id_blob,
+                None,
+            )
             .await
-            .map_err(|e| {
-                println!("Failed to open DHT record: {}", e);
-                anyhow!("Failed to open DHT record: {}", e)
-            })?;
-    
-        println!("DHT record opened successfully.");
-    
-        // Set the stored route ID blob at subkey 2
-        routing_context
-            .set_dht_value(self.get_dht_record().key().clone(), 2u32, route_id_blob, self.owner_secret().map(|secret| KeyPair::new(self.owner_key(), secret)))
-            .await
-            .map_err(|e| {
-                println!("Failed to set value in DHT: {}", e);
-                anyhow!("Failed to set value in DHT: {}", e)
-            })?;
-    
-        println!("Value set successfully in DHT.");
-    
-        // Close the DHT record after setting the value
-        routing_context.close_dht_record(self.get_dht_record().key().clone()).await?;
-    
-        println!("DHT record closed successfully.");
-    
+            .map_err(|e| anyhow!("Failed to store route ID blob in DHT: {}", e))?;
+
         Ok(())
     }
     
     async fn get_route_id_from_dht(&self, subkey: u32) -> Result<Vec<u8>> {
         let routing_context = &self.get_routing_context();
         
-        println!("Reopening DHT record before reading...");
-        
-        // Ensure the DHT record is opened before reading
-        let dht_record = routing_context
-            .open_dht_record(self.get_dht_record().key().clone(), self.owner_secret().map(|secret| KeyPair::new(self.owner_key(), secret)))
-            .await
-            .map_err(|e| {
-                println!("Failed to reopen DHT record: {}", e);
-                anyhow!("Failed to reopen DHT record: {}", e)
-            })?;
+        // Use the existing DHT record
+        let dht_record = self.get_dht_record(); 
         
         // Get the stored route ID blob at subkey
         let stored_blob = routing_context
-            .get_dht_value(self.get_dht_record().key().clone(), subkey, false)
+            .get_dht_value(dht_record.key().clone(), subkey, false)
             .await?
             .ok_or_else(|| anyhow!("Route ID blob not found in DHT"))?;
     
