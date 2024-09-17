@@ -16,7 +16,7 @@ use veilid_core::{
 mod tests {
     use super::*;
     use tokio::fs;
-    use tokio::sync::mpsc;    
+    use tokio::sync::mpsc;  
     use tmpdir::TmpDir;
 
     #[tokio::test]
@@ -49,7 +49,7 @@ mod tests {
 
         // Check that the id matches group.id()
         assert_eq!(retrieved_keypair.id, group.id());
-        
+
         // Check that the public_key matches the owner public key from the DHT record
         assert_eq!(retrieved_keypair.public_key, loaded_group.get_dht_record().owner().clone());
 
@@ -89,17 +89,15 @@ mod tests {
         assert_eq!(retrieved_name, repo_name);
 
         // Get the update receiver from the backend
-        let update_rx = backend
-            .get_update_receiver()
-            .expect("Failed to get update receiver");
+        let update_rx = backend.subscribe_updates().expect("Failed to subscribe to updates");
 
         // Set up a channel to receive AppMessage updates
         let (message_tx, mut message_rx) = mpsc::channel(1);
 
         // Spawn a task to listen for updates
         tokio::spawn(async move {
-            let mut rx = update_rx.lock().await;
-            while let Some(update) = rx.recv().await {
+            let mut rx = update_rx.resubscribe(); 
+            while let Ok(update) = rx.recv().await {
                 if let VeilidUpdate::AppMessage(app_message) = update {
                     // Optionally, filter by route_id or other criteria
                     message_tx.send(app_message).await.unwrap();
