@@ -8,7 +8,7 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
-use tokio::sync::{mpsc::{self, Receiver}, oneshot, Mutex};
+use tokio::sync::{mpsc::{self, Receiver}, oneshot, broadcast};
 use tracing::info;
 use veilid_core::{
     api_startup_config, vld0_generate_keypair, CryptoKey, CryptoSystem, CryptoSystemVLD0,
@@ -21,7 +21,7 @@ pub struct Backend {
     path: PathBuf,
     port: u16,
     veilid_api: Option<VeilidAPI>,
-    update_rx: Option<Arc<Mutex<Receiver<VeilidUpdate>>>>,
+    update_rx: Option<broadcast::Receiver<VeilidUpdate>>,
     groups: HashMap<CryptoKey, Box<Group>>,
     repos: HashMap<CryptoKey, Box<Repo>>,
 }
@@ -53,13 +53,13 @@ impl Backend {
             )
         })?;
 
-        let (update_tx, mut update_rx) = mpsc::channel::<VeilidUpdate>(32);
+        let (update_tx, update_rx) = broadcast::channel::<VeilidUpdate>(32);
 
         let update_callback: UpdateCallback = Arc::new(move |update| {
             let update_tx = update_tx.clone();
             tokio::spawn(async move {
-                if update_tx.send(update).await.is_err() {
-                    println!("Receiver dropped");
+                if let Err(e) = update_tx.send(update) {
+                    println!("Failed to send update: {}", e);
                 }
             });
         });
@@ -106,13 +106,12 @@ impl Backend {
 
         println!("Waiting for network ready state");
 
-        let update_rx = Arc::new(Mutex::new(update_rx));
+        self.update_rx = Some(update_rx);
 
-        // Wait for network readiness using the update receiver
-        self.wait_for_network(update_rx.clone()).await?;
-
-        // Store the update_rx in the Backend struct
-        self.update_rx = Some(update_rx.clone());
+        // Wait for network ready state
+        if let Some(rx) = &self.update_rx {
+            self.wait_for_network(rx.resubscribe()).await?;
+        }
 
         Ok(())
     }
@@ -130,9 +129,8 @@ impl Backend {
         Ok(())
     }
 
-    async fn wait_for_network(&self, update_rx: Arc<Mutex<Receiver<VeilidUpdate>>>) -> Result<()> {
-        let mut rx = update_rx.lock().await;
-        while let Some(update) = rx.recv().await {
+    async fn wait_for_network(&self, mut update_rx: broadcast::Receiver<VeilidUpdate>) -> Result<()> {
+        while let Ok(update) = update_rx.recv().await {
             if let VeilidUpdate::Attachment(attachment_state) = update {
                 if attachment_state.public_internet_ready {
                     println!("Public internet ready!");
@@ -320,9 +318,9 @@ impl Backend {
         Ok(Box::new(repo))
     }
 
-    pub fn get_update_receiver(&self) -> Option<Arc<Mutex<Receiver<VeilidUpdate>>>> {
-        self.update_rx.clone()
-    }
+    pub fn subscribe_updates(&self) -> Option<broadcast::Receiver<VeilidUpdate>> {
+        self.update_rx.as_ref().map(|rx| rx.resubscribe())
+    }    
 
     pub fn get_veilid_api(&self) -> Option<&VeilidAPI> {
         self.veilid_api.as_ref()
