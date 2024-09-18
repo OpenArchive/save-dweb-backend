@@ -4,7 +4,7 @@ pub mod backend;
 pub mod common;
 pub mod constants;
 
-use crate::constants::{GROUP_NOT_FOUND, UNABLE_TO_SET_GROUP_NAME, UNABLE_TO_GET_GROUP_NAME, TEST_GROUP_NAME, UNABLE_TO_STORE_KEYPAIR, FAILED_TO_LOAD_KEYPAIR, KEYPAIR_NOT_FOUND, FAILED_TO_DESERIALIZE_KEYPAIR};
+use crate::constants::{GROUP_NOT_FOUND, UNABLE_TO_SET_GROUP_NAME, UNABLE_TO_GET_GROUP_NAME, TEST_GROUP_NAME, UNABLE_TO_STORE_KEYPAIR, FAILED_TO_LOAD_KEYPAIR, KEYPAIR_NOT_FOUND, FAILED_TO_DESERIALIZE_KEYPAIR, ROUTE_ID_DHT_KEY};
 
 use crate::backend::Backend;
 use crate::common::{CommonKeypair, DHTEntity};
@@ -108,9 +108,6 @@ mod tests {
         // Get VeilidAPI instance from backend
         let veilid_api = backend.get_veilid_api().expect("Failed to get VeilidAPI instance");
 
-        // Define the subkey
-        let subkey = 2u32;
-
         // Create a new private route
         let (route_id, route_id_blob) = veilid_api
             .new_custom_private_route(
@@ -123,7 +120,7 @@ mod tests {
 
         // Store the route_id_blob in DHT
         loaded_repo
-            .store_route_id_in_dht(subkey, route_id_blob.clone())
+            .store_route_id_in_dht(route_id_blob.clone())
             .await
             .expect("Failed to store route ID blob in DHT");
 
@@ -132,7 +129,7 @@ mod tests {
 
         // Send the message
         loaded_repo
-            .send_message_to_owner(veilid_api, message.clone(), subkey)
+            .send_message_to_owner(veilid_api, message.clone(), ROUTE_ID_DHT_KEY)
             .await
             .expect("Failed to send message to repo owner");
 

@@ -1,6 +1,7 @@
 #![allow(async_fn_in_trait)]
 #![allow(clippy::async_yields_async)]
 
+use crate::constants::ROUTE_ID_DHT_KEY;
 use serde::{Serialize, Deserialize};
 use eyre::{Result, anyhow};
 use std::sync::Arc;
@@ -100,16 +101,15 @@ pub trait DHTEntity {
         Ok(())
     }
 
-     async fn store_route_id_in_dht(
+    async fn store_route_id_in_dht(
         &self,
-        subkey: u32,
         route_id_blob: Vec<u8>,
     ) -> Result<()> {
         let routing_context = &self.get_routing_context();
         let dht_record = self.get_dht_record();
         routing_context.set_dht_value(
                 dht_record.key().clone(),
-                subkey,
+                ROUTE_ID_DHT_KEY,
                 route_id_blob,
                 None,
             )
@@ -127,7 +127,7 @@ pub trait DHTEntity {
         
         // Get the stored route ID blob at subkey
         let stored_blob = routing_context
-            .get_dht_value(dht_record.key().clone(), subkey, false)
+            .get_dht_value(dht_record.key().clone(), ROUTE_ID_DHT_KEY, false)
             .await?
             .ok_or_else(|| anyhow!("Route ID blob not found in DHT"))?;
     
