@@ -23,8 +23,8 @@ pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
             )
             .await;
 
-        if result.is_ok() {
-            return Ok(result.unwrap());
+        if let Ok(value) = result {
+            return Ok(value);
         }
     }
     Err(anyhow!("Unable to create route, reached max retries"))
