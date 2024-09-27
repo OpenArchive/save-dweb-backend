@@ -1,10 +1,12 @@
 use serde::{Serialize, Deserialize};
-use eyre::{Result, Error, anyhow};
+use anyhow::{Result, Error, anyhow};
+use std::path::PathBuf;
+use iroh_blobs::Hash;
 use std::sync::Arc;
 use veilid_core::{
     CryptoKey, DHTRecordDescriptor, CryptoTyped, CryptoSystemVLD0, RoutingContext, SharedSecret, TypedKey
 };
-
+use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 use crate::common::DHTEntity;
 use crate::repo::Repo;
 
@@ -15,6 +17,7 @@ pub struct Group {
     pub routing_context: Arc<RoutingContext>,
     pub crypto_system: CryptoSystemVLD0,
     pub repos: Vec<Repo>,
+    pub iroh_blobs: Option<VeilidIrohBlobs>,
 }
 
 impl Group {
@@ -23,6 +26,7 @@ impl Group {
         encryption_key: SharedSecret,
         routing_context: Arc<RoutingContext>,
         crypto_system: CryptoSystemVLD0,
+        iroh_blobs: Option<VeilidIrohBlobs>,
     ) -> Self {
         Self {
             dht_record,
@@ -30,6 +34,7 @@ impl Group {
             routing_context,
             crypto_system,
             repos: Vec::new(), 
+            iroh_blobs,
         }
     }
 
@@ -59,6 +64,15 @@ impl Group {
             repo.get_name().await
         } else {
             Err(anyhow!("Repo not found"))
+        }
+    }
+
+    pub async fn upload_blob(&self, file_path: PathBuf) -> Result<Hash> {
+        if let Some(iroh_blobs) = &self.iroh_blobs {
+            let hash = iroh_blobs.upload_from_path(file_path).await?;
+            Ok(hash)
+        } else {
+            Err(anyhow!("iroh_blobs not initialized"))
         }
     }
 
