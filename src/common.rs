@@ -3,12 +3,32 @@
 
 use crate::constants::ROUTE_ID_DHT_KEY;
 use serde::{Serialize, Deserialize};
-use eyre::{Result, anyhow};
+use anyhow::{Result, anyhow};
+use veilid_core::RouteId;
 use std::sync::Arc;
 use veilid_core::{
     CryptoKey, SharedSecret, CryptoTyped, DHTRecordDescriptor, RoutingContext, CryptoSystemVLD0,
-    ProtectedStore, Nonce, CRYPTO_KIND_VLD0, CryptoSystem, KeyPair, VeilidAPI
+    ProtectedStore, Nonce, CRYPTO_KIND_VLD0, CryptoSystem, KeyPair, VeilidAPI, VALID_CRYPTO_KINDS,
 };
+
+pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
+    let mut retries = 3;
+    while retries != 0 {
+        retries -= 1;
+        let result = veilid
+            .new_custom_private_route(
+                &VALID_CRYPTO_KINDS,
+                veilid_core::Stability::Reliable,
+                veilid_core::Sequencing::EnsureOrdered,
+            )
+            .await;
+
+        if result.is_ok() {
+            return Ok(result.unwrap());
+        }
+    }
+    Err(anyhow!("Unable to create route, reached max retries"))
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct CommonKeypair {
