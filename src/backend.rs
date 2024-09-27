@@ -1,4 +1,4 @@
-use crate::common::{CommonKeypair, DHTEntity};
+use crate::common::{CommonKeypair, DHTEntity, make_route};
 use crate::group::Group;
 use crate::repo::Repo;
 use anyhow::{anyhow, Result};
@@ -15,6 +15,7 @@ use veilid_core::{
     CryptoTyped, DHTSchema, KeyPair, ProtectedStore, RoutingContext, SharedSecret, UpdateCallback,
     VeilidAPI, VeilidConfigInner, VeilidUpdate, CRYPTO_KIND_VLD0, TypedKey, VeilidConfigProtectedStore
 };
+use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 use xdg::BaseDirectories;
 
 pub struct Backend {
@@ -24,6 +25,7 @@ pub struct Backend {
     update_rx: Option<broadcast::Receiver<VeilidUpdate>>,
     groups: HashMap<CryptoKey, Box<Group>>,
     repos: HashMap<CryptoKey, Box<Repo>>,
+    iroh_blobs: Option<VeilidIrohBlobs>,
 }
 
 impl Backend {
@@ -35,6 +37,7 @@ impl Backend {
             update_rx: None, 
             groups: HashMap::new(),
             repos: HashMap::new(),
+            iroh_blobs: None,
         })
     }
 
@@ -52,9 +55,9 @@ impl Backend {
                 e
             )
         })?;
-
+    
         let (update_tx, update_rx) = broadcast::channel::<VeilidUpdate>(32);
-
+    
         let update_callback: UpdateCallback = Arc::new(move |update| {
             let update_tx = update_tx.clone();
             tokio::spawn(async move {
@@ -63,10 +66,10 @@ impl Backend {
                 }
             });
         });
-
+    
         let xdg_dirs = BaseDirectories::with_prefix("save-dweb-backend")?;
         let base_dir = xdg_dirs.get_data_home();
-
+    
         let config_inner = VeilidConfigInner {
             program_name: "save-dweb-backend".to_string(),
             namespace: "openarchive".into(),
@@ -92,7 +95,7 @@ impl Backend {
             },
             network: Default::default(),
         };
-
+    
         if self.veilid_api.is_none() {
             let veilid_api = api_startup_config(update_callback, config_inner)
                 .await
@@ -101,23 +104,48 @@ impl Backend {
         } else {
             return Err(anyhow!("Veilid already initialized"));
         }
-
+    
         self.veilid_api.clone().unwrap().attach().await?;
-
+    
         println!("Waiting for network ready state");
-
+    
         self.update_rx = Some(update_rx);
-
+    
         // Wait for network ready state
         if let Some(rx) = &self.update_rx {
             self.wait_for_network(rx.resubscribe()).await?;
         }
-
+    
+        // Initialize iroh_blobs store
+        let store = iroh_blobs::store::fs::Store::load(self.path.join("iroh")).await?;
+    
+        // Get veilid_api and routing_context
+        let veilid_api = self.veilid_api.clone().unwrap();
+        let routing_context = veilid_api.routing_context()?;
+    
+        // Create route_id and route_id_blob
+        let (route_id, route_id_blob) = make_route(&veilid_api).await?;
+    
+        // Initialize iroh_blobs
+        self.iroh_blobs = Some(VeilidIrohBlobs::new(
+            veilid_api.clone(),
+            routing_context,
+            route_id_blob,
+            route_id,
+            self.update_rx.as_ref().unwrap().resubscribe(),
+            store,
+        ));
+    
         Ok(())
     }
 
     pub async fn stop(&mut self) -> Result<()> {
         println!("Stopping Backend...");
+        if let Some(iroh_blobs) = self.iroh_blobs.take() {
+            println!("Shutting down Veilid Iroh Blobs");
+            iroh_blobs.shutdown().await?;
+            println!("Veilid Iroh Blobs shut down successfully");
+        }
         if self.veilid_api.is_some() {
             println!("Shutting down Veilid API");
             let veilid = self.veilid_api.take();
@@ -161,6 +189,7 @@ impl Backend {
             encryption_key,
             Arc::new(routing_context),
             crypto_system,
+            self.iroh_blobs.clone(),
         );
     
         let protected_store = veilid.protected_store().unwrap();
@@ -214,6 +243,7 @@ impl Backend {
             routing_context: Arc::new(routing_context),
             crypto_system,
             repos: Vec::new(),
+            iroh_blobs: self.iroh_blobs.clone(),
         };
         self.groups.insert(group.id(), Box::new(group.clone()));
     
@@ -261,6 +291,7 @@ impl Backend {
             Some(CryptoTyped::new(CRYPTO_KIND_VLD0, keypair.secret)),
             Arc::new(routing_context),
             crypto_system,
+            self.iroh_blobs.clone(),
         );
 
         self.repos.insert(repo.get_id(), Box::new(repo.clone()));
@@ -313,6 +344,7 @@ impl Backend {
                 .map(|sk| CryptoTyped::new(CRYPTO_KIND_VLD0, sk)),
             routing_context: Arc::new(routing_context),
             crypto_system,
+            iroh_blobs: self.iroh_blobs.clone(),
         };
 
         Ok(Box::new(repo))
