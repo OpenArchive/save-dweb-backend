@@ -9,18 +9,25 @@ use crate::constants::{GROUP_NOT_FOUND, UNABLE_TO_SET_GROUP_NAME, UNABLE_TO_GET_
 use crate::backend::Backend;
 use crate::common::{CommonKeypair, DHTEntity};
 use veilid_core::{
-    vld0_generate_keypair, TypedKey, CRYPTO_KIND_VLD0, VeilidUpdate, VALID_CRYPTO_KINDS
+    vld0_generate_keypair, TypedKey, CRYPTO_KIND_VLD0, VeilidUpdate, VALID_CRYPTO_KINDS,
 };
+use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
+use iroh_blobs::Hash;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::fs;
-    use tokio::sync::mpsc;  
+    use bytes::Bytes;
+    use tokio::sync::mpsc;
+    use tokio::time::Duration;
+    use tokio_stream::wrappers::ReceiverStream;
+    use tokio_stream::StreamExt;
     use tmpdir::TmpDir;
+    use anyhow::Result;
 
     #[tokio::test]
-    async fn basic_test() {
+    async fn basic_test() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
         let port = 8080;
 
@@ -96,7 +103,7 @@ mod tests {
 
         // Spawn a task to listen for updates
         tokio::spawn(async move {
-            let mut rx = update_rx.resubscribe(); 
+            let mut rx = update_rx.resubscribe();
             while let Ok(update) = rx.recv().await {
                 if let VeilidUpdate::AppMessage(app_message) = update {
                     // Optionally, filter by route_id or other criteria
@@ -139,7 +146,63 @@ mod tests {
         // Verify the message
         assert_eq!(received_app_message.message(), message.as_slice());
 
-        backend.stop().await.expect("Unable to stop");
-    }
+        // Access the VeilidIrohBlobs instance
+        let iroh_blobs = repo
+            .iroh_blobs
+            .as_ref()
+            .expect("iroh_blobs not initialized");
 
+        // Upload a blob from data_to_upload
+        let data_to_upload = b"Test data for blob".to_vec();
+
+        // Create a stream (Receiver) from data_to_upload
+        let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
+        tx.send(Ok(Bytes::from(data_to_upload.clone()))).await.unwrap();
+        drop(tx); // Close the sender
+
+        // Upload from stream
+        let hash = iroh_blobs
+            .upload_from_stream(rx)
+            .await
+            .expect("Failed to upload blob");
+
+        // After uploading the blob
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Get the route_id_blob from iroh_blobs
+        let route_id_blob = iroh_blobs.route_id_blob();
+
+        // Get VeilidAPI instance from backend
+        let veilid_api = backend.get_veilid_api().expect("Failed to get VeilidAPI instance");
+
+        // Get update_rx from backend
+        let mut update_rx = backend.subscribe_updates().expect("Failed to get update receiver");
+
+        // Call download_blob
+        loaded_repo.download_blob(&veilid_api, &mut update_rx, route_id_blob, &hash).await?;
+
+        // Retrieve the data from the store
+        let receiver = iroh_blobs
+            .read_file(hash)
+            .await
+            .expect("Failed to get blob");
+
+        let mut retrieved_data = Vec::new();
+
+        // Read data from the receiver
+        let mut stream = tokio_stream::wrappers::ReceiverStream::new(receiver);
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(bytes) => retrieved_data.extend_from_slice(bytes.as_ref()),
+                Err(e) => panic!("Error reading data: {:?}", e),
+            }
+        }
+
+        // Verify the data
+        assert_eq!(retrieved_data, data_to_upload);
+
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
+    
 }
