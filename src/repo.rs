@@ -106,7 +106,7 @@ impl Repo {
                     if let Some(sender_route_id) = app_message.route_id() {
                         if sender_route_id == &route_id_clone {
                             let message = app_message.message();
-                            if message.len() < 1 {
+                            if message.is_empty() {
                                 let _ = send_file_clone
                                     .send(Err(std::io::Error::new(
                                         ErrorKind::InvalidData,
