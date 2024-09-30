@@ -115,6 +115,8 @@ mod tests {
         // Get VeilidAPI instance from backend
         let veilid_api = backend.get_veilid_api().expect("Failed to get VeilidAPI instance");
 
+        println!("Creating a new custom private route with valid crypto kinds: {:?}", VALID_CRYPTO_KINDS);
+
         // Create a new private route
         let (route_id, route_id_blob) = veilid_api
             .new_custom_private_route(
@@ -133,6 +135,8 @@ mod tests {
 
         // Define the message to send
         let message = b"Test Message to Repo Owner".to_vec();
+
+        println!("Sending message to owner...");
 
         // Send the message
         loaded_repo
