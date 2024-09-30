@@ -183,7 +183,7 @@ mod tests {
         let mut update_rx = backend.subscribe_updates().expect("Failed to get update receiver");
 
         // Call download_blob
-        loaded_repo.download_blob(&veilid_api, &mut update_rx, route_id_blob, &hash).await?;
+        loaded_repo.download_blob(veilid_api, &mut update_rx, route_id_blob, &hash).await?;
 
         // Retrieve the data from the store
         let receiver = iroh_blobs
