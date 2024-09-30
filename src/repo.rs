@@ -122,7 +122,7 @@ impl Repo {
                                 break;
                             } else if command == DATA {
                                 let bytes = Bytes::copy_from_slice(&message[1..]);
-                                if let Err(_) = send_file_clone.send(Ok(bytes)).await {
+                                if send_file_clone.send(Ok(bytes)).await.is_err() {
                                     return;
                                 }
                             } else if command == ERR {
@@ -145,13 +145,13 @@ impl Repo {
             let got_hash = iroh_blobs.upload_from_stream(read_file).await?;
 
             if got_hash.eq(hash) {
-                return Ok(());
+               Ok(())
             } else {
                 // Handle hash mismatch if necessary
-                return Err(anyhow!("Peer returned invalid hash {}", got_hash));
+                Err(anyhow!("Peer returned invalid hash {}", got_hash))
             }
         } else {
-            return Err(anyhow!("iroh_blobs not initialized"));
+            Err(anyhow!("iroh_blobs not initialized"))
         }
     }
 
