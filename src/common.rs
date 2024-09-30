@@ -4,27 +4,28 @@
 use crate::constants::ROUTE_ID_DHT_KEY;
 use serde::{Serialize, Deserialize};
 use anyhow::{Result, anyhow};
-use veilid_core::RouteId;
 use std::sync::Arc;
 use veilid_core::{
     CryptoKey, SharedSecret, CryptoTyped, DHTRecordDescriptor, RoutingContext, CryptoSystemVLD0,
-    ProtectedStore, Nonce, CRYPTO_KIND_VLD0, CryptoSystem, KeyPair, VeilidAPI, VALID_CRYPTO_KINDS,
+    ProtectedStore, Nonce, CRYPTO_KIND_VLD0, CryptoSystem, KeyPair, VeilidAPI, VALID_CRYPTO_KINDS, Sequencing, Stability, RouteId
 };
 
 pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
-    let mut retries = 3;
-    while retries != 0 {
+    let mut retries = 6;
+    while retries > 0 {
         retries -= 1;
         let result = veilid
             .new_custom_private_route(
                 &VALID_CRYPTO_KINDS,
-                veilid_core::Stability::Reliable,
-                veilid_core::Sequencing::EnsureOrdered,
+                Stability::Reliable,
+                Sequencing::PreferOrdered,
             )
             .await;
 
         if let Ok(value) = result {
             return Ok(value);
+        } else if let Err(e) = &result {
+            eprintln!("Failed to create route: {}", e);
         }
     }
     Err(anyhow!("Unable to create route, reached max retries"))
@@ -162,18 +163,28 @@ pub trait DHTEntity {
         message: Vec<u8>,
         subkey: u32,
     ) -> Result<()> {
-        let routing_context = &self.get_routing_context();
+        let routing_context = self.get_routing_context();
     
         // Retrieve the route ID blob from DHT
         let route_id_blob = self.get_route_id_from_dht(subkey).await?;
     
         // Import the route using the blob via VeilidAPI
-        let route_id = veilid.import_remote_private_route(route_id_blob)?;
+        let route_id = match veilid.import_remote_private_route(route_id_blob) {
+            Ok(route) => route,
+            Err(e) => {
+                eprintln!("Failed to import remote private route: {:?}", e);
+                return Err(e.into());
+            }
+        };
     
         // Send an AppMessage to the repo owner using the imported route ID
-        routing_context
+        if let Err(e) = routing_context
             .app_message(veilid_core::Target::PrivateRoute(route_id), message)
-            .await?;
+            .await
+        {
+            eprintln!("Failed to send message: {:?}", e);
+            return Err(e.into());
+        }
     
         Ok(())
     }
