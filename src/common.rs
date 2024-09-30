@@ -61,6 +61,7 @@ pub trait DHTEntity {
     fn get_crypto_system(&self) -> CryptoSystemVLD0;
     fn get_dht_record(&self) -> DHTRecordDescriptor;
     fn get_secret_key(&self) -> Option<CryptoKey>;
+    fn get_route_id_blob(&self) -> Vec<u8>;
 
      // Default method to get the owner key
      fn owner_key(&self) -> CryptoKey {
