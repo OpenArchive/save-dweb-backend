@@ -102,4 +102,8 @@ impl DHTEntity for Group {
     fn get_secret_key(&self) -> Option<CryptoKey> {
         self.owner_secret()
     }
+
+    fn get_route_id_blob(&self) -> Vec<u8> {
+        self.iroh_blobs.as_ref().expect("iroh_blobs not initialized").route_id_blob()
+    }
 }
