@@ -15,11 +15,14 @@ use veilid_core::{
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 use iroh_blobs::Hash;
 
+use serial_test::serial;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::fs;
     use bytes::Bytes;
+    use std::path::Path;
     use tokio::sync::mpsc;
     use tokio::time::Duration;
     use tokio_stream::wrappers::ReceiverStream;
@@ -28,6 +31,63 @@ mod tests {
     use anyhow::Result;
 
     #[tokio::test]
+    #[serial]
+    async fn blob_transfer_test() -> Result<()> {
+        let path = TmpDir::new("test_dweb_backend").await.unwrap();
+        let port = 8080;
+    
+        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+    
+        // Initialize the backend
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+    
+        // Create a group and a repo
+        let group = backend.create_group().await.expect("Unable to create group");
+        let repo = backend.create_repo().await.expect("Unable to create repo");
+    
+        let iroh_blobs = repo.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
+    
+        // Prepare data to upload as a blob
+        let data_to_upload = b"Test data for blob".to_vec();
+        let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
+        tx.send(Ok(Bytes::from(data_to_upload.clone()))).await.unwrap();
+        drop(tx); // Close the sender
+    
+        // upload the data as a blob and get the hash
+        let hash = iroh_blobs
+            .upload_from_stream(rx)
+            .await
+            .expect("Failed to upload blob");
+    
+        // some delay to ensure blob is uploaded
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    
+        // download the blob
+        let receiver = iroh_blobs
+            .read_file(hash.clone())
+            .await
+            .expect("Failed to read blob");
+    
+        // retrieve the data from the receiver
+        let mut retrieved_data = Vec::new();
+        let mut stream = ReceiverStream::new(receiver);
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(bytes) => retrieved_data.extend_from_slice(bytes.as_ref()),
+                Err(e) => panic!("Error reading data: {:?}", e),
+            }
+        }
+    
+        // Verify that the downloaded data matches the uploaded data
+        assert_eq!(retrieved_data, data_to_upload);
+    
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn basic_test() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
         let port = 8080;
