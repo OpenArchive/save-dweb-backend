@@ -1,64 +1,87 @@
-pub mod group;
-pub mod repo;
 pub mod backend;
 pub mod common;
 pub mod constants;
+pub mod group;
+pub mod repo;
 
-use crate::constants::{GROUP_NOT_FOUND, UNABLE_TO_SET_GROUP_NAME, UNABLE_TO_GET_GROUP_NAME, TEST_GROUP_NAME, UNABLE_TO_STORE_KEYPAIR, FAILED_TO_LOAD_KEYPAIR, KEYPAIR_NOT_FOUND, FAILED_TO_DESERIALIZE_KEYPAIR, ROUTE_ID_DHT_KEY};
+use crate::constants::{
+    FAILED_TO_DESERIALIZE_KEYPAIR, FAILED_TO_LOAD_KEYPAIR, GROUP_NOT_FOUND, KEYPAIR_NOT_FOUND,
+    ROUTE_ID_DHT_KEY, TEST_GROUP_NAME, UNABLE_TO_GET_GROUP_NAME, UNABLE_TO_SET_GROUP_NAME,
+    UNABLE_TO_STORE_KEYPAIR,
+};
 
 use crate::backend::Backend;
 use crate::common::{CommonKeypair, DHTEntity};
 use veilid_core::{
-    vld0_generate_keypair, TypedKey, CRYPTO_KIND_VLD0, VeilidUpdate, VALID_CRYPTO_KINDS
+    vld0_generate_keypair, TypedKey, VeilidUpdate, CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::fs;
-    use tokio::sync::mpsc;  
     use tmpdir::TmpDir;
+    use tokio::fs;
+    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn basic_test() {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
         let port = 8080;
 
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
 
         let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
 
         backend.start().await.expect("Unable to start");
-        let group = backend.create_group().await.expect("Unable to create group");
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
 
-        group.set_name(TEST_GROUP_NAME).await.expect(UNABLE_TO_SET_GROUP_NAME);
+        group
+            .set_name(TEST_GROUP_NAME)
+            .await
+            .expect(UNABLE_TO_SET_GROUP_NAME);
         let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
         assert_eq!(name, TEST_GROUP_NAME);
 
         backend.stop().await.expect("Unable to stop");
 
         backend.start().await.expect("Unable to restart");
-        let mut loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND);
+        let mut loaded_group = backend
+            .get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id()))
+            .await
+            .expect(GROUP_NOT_FOUND);
 
         let protected_store = backend.get_protected_store().unwrap();
-        let keypair_data = protected_store.load_user_secret(group.id().to_string())
+        let keypair_data = protected_store
+            .load_user_secret(group.id().to_string())
             .await
             .expect(FAILED_TO_LOAD_KEYPAIR)
             .expect(KEYPAIR_NOT_FOUND);
-        let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data).expect(FAILED_TO_DESERIALIZE_KEYPAIR);
+        let retrieved_keypair: CommonKeypair =
+            serde_cbor::from_slice(&keypair_data).expect(FAILED_TO_DESERIALIZE_KEYPAIR);
 
         // Check that the id matches group.id()
         assert_eq!(retrieved_keypair.id, group.id());
 
         // Check that the public_key matches the owner public key from the DHT record
-        assert_eq!(retrieved_keypair.public_key, loaded_group.get_dht_record().owner().clone());
+        assert_eq!(
+            retrieved_keypair.public_key,
+            loaded_group.get_dht_record().owner().clone()
+        );
 
         // Check that the secret and encryption keys match
         assert_eq!(retrieved_keypair.secret_key, group.get_secret_key());
         assert_eq!(retrieved_keypair.encryption_key, group.get_encryption_key());
 
         // Check if we can get group name
-        let group_name = loaded_group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
+        let group_name = loaded_group
+            .get_name()
+            .await
+            .expect(UNABLE_TO_GET_GROUP_NAME);
         assert_eq!(group_name, TEST_GROUP_NAME);
 
         // Compare the loaded group's id with the retrieved id
@@ -70,33 +93,46 @@ mod tests {
         let repo_name = "Test Repo";
 
         // Set and get repo name
-        repo.set_name(repo_name).await.expect("Unable to set repo name");
+        repo.set_name(repo_name)
+            .await
+            .expect("Unable to set repo name");
         let name = repo.get_name().await.expect("Unable to get repo name");
         assert_eq!(name, repo_name);
 
         // Add repo to group
-        loaded_group.add_repo(repo.clone()).await.expect("Unable to add repo to group");
+        loaded_group
+            .add_repo(repo.clone())
+            .await
+            .expect("Unable to add repo to group");
 
         // List known repos
         let repos = loaded_group.list_repos().await;
         assert!(repos.contains(&repo_key));
 
         // Retrieve repo by key
-        let loaded_repo = backend.get_repo(repo_key.clone()).await.expect("Repo not found");
+        let loaded_repo = backend
+            .get_repo(repo_key.clone())
+            .await
+            .expect("Repo not found");
 
         // Check if repo name is correctly retrieved
-        let retrieved_name = loaded_repo.get_name().await.expect("Unable to get repo name after restart");
+        let retrieved_name = loaded_repo
+            .get_name()
+            .await
+            .expect("Unable to get repo name after restart");
         assert_eq!(retrieved_name, repo_name);
 
         // Get the update receiver from the backend
-        let update_rx = backend.subscribe_updates().expect("Failed to subscribe to updates");
+        let update_rx = backend
+            .subscribe_updates()
+            .expect("Failed to subscribe to updates");
 
         // Set up a channel to receive AppMessage updates
         let (message_tx, mut message_rx) = mpsc::channel(1);
 
         // Spawn a task to listen for updates
         tokio::spawn(async move {
-            let mut rx = update_rx.resubscribe(); 
+            let mut rx = update_rx.resubscribe();
             while let Ok(update) = rx.recv().await {
                 if let VeilidUpdate::AppMessage(app_message) = update {
                     // Optionally, filter by route_id or other criteria
@@ -106,7 +142,9 @@ mod tests {
         });
 
         // Get VeilidAPI instance from backend
-        let veilid_api = backend.get_veilid_api().expect("Failed to get VeilidAPI instance");
+        let veilid_api = backend
+            .get_veilid_api()
+            .expect("Failed to get VeilidAPI instance");
 
         // Create a new private route
         let (route_id, route_id_blob) = veilid_api
@@ -142,4 +180,33 @@ mod tests {
         backend.stop().await.expect("Unable to stop");
     }
 
+    #[tokio::test]
+    async fn test_join() {
+        let path = TmpDir::new("test_dweb_backend").await.unwrap();
+        let port = 8080;
+
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+
+        backend.start().await.expect("Unable to start");
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
+
+        group
+            .set_name(TEST_GROUP_NAME)
+            .await
+            .expect(UNABLE_TO_SET_GROUP_NAME);
+
+        let url = group.get_url();
+
+        let keys = backend::parse_url(url.as_str()).expect("URL was parsed back out");
+
+        assert_eq!(keys.id, group.id());
+        backend.stop().await.expect("Unable to stop");
+    }
 }

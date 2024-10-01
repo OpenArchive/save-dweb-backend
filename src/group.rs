@@ -1,12 +1,21 @@
-use serde::{Serialize, Deserialize};
-use eyre::{Result, Error, anyhow};
+use eyre::{anyhow, Error, Result};
+use hex::ToHex;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use url::Url;
 use veilid_core::{
-    CryptoKey, DHTRecordDescriptor, CryptoTyped, CryptoSystemVLD0, RoutingContext, SharedSecret, TypedKey
+    CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, RoutingContext, SharedSecret,
+    TypedKey,
 };
 
 use crate::common::DHTEntity;
 use crate::repo::Repo;
+
+pub const PROTOCOL_SCHEME: &str = "save+dweb:";
+pub const URL_DHT_KEY: &str = "dht";
+pub const URL_ENCRYPTION_KEY: &str = "enc";
+pub const URL_PUBLIC_KEY: &str = "pk";
+pub const URL_SECRET_KEY: &str = "sk";
 
 #[derive(Clone)]
 pub struct Group {
@@ -29,7 +38,7 @@ impl Group {
             encryption_key,
             routing_context,
             crypto_system,
-            repos: Vec::new(), 
+            repos: Vec::new(),
         }
     }
 
@@ -44,7 +53,7 @@ impl Group {
     pub fn owner_secret(&self) -> Option<CryptoKey> {
         self.dht_record.owner_secret().cloned()
     }
-    
+
     pub async fn add_repo(&mut self, repo: Repo) -> Result<()> {
         self.repos.push(repo);
         Ok(())
@@ -62,6 +71,26 @@ impl Group {
         }
     }
 
+    pub fn get_url(&self) -> String {
+        let mut url = Url::parse(format!("{0}:?", PROTOCOL_SCHEME).as_str()).unwrap();
+
+        url.query_pairs_mut()
+            .append_pair(URL_DHT_KEY, self.id().encode_hex::<String>().as_str())
+            .append_pair(
+                URL_ENCRYPTION_KEY,
+                self.get_encryption_key().encode_hex::<String>().as_str(),
+            )
+            .append_pair(
+                URL_PUBLIC_KEY,
+                self.owner_key().encode_hex::<String>().as_str(),
+            )
+            .append_pair(
+                URL_SECRET_KEY,
+                self.owner_secret().unwrap().encode_hex::<String>().as_str(),
+            );
+
+        return url.to_string();
+    }
 }
 
 impl DHTEntity for Group {
