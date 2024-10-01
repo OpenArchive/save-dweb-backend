@@ -8,12 +8,12 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc::{self, Receiver}, oneshot, broadcast};
 use tracing::info;
 use veilid_core::{
     api_startup_config, vld0_generate_keypair, CryptoKey, CryptoSystem, CryptoSystemVLD0,
     CryptoTyped, DHTSchema, KeyPair, ProtectedStore, RoutingContext, SharedSecret, UpdateCallback,
-    VeilidAPI, VeilidConfigInner, VeilidUpdate, CRYPTO_KIND_VLD0, TypedKey
+    VeilidAPI, VeilidConfigInner, VeilidUpdate, CRYPTO_KIND_VLD0, TypedKey, VeilidConfigProtectedStore
 };
 use xdg::BaseDirectories;
 
@@ -21,6 +21,7 @@ pub struct Backend {
     path: PathBuf,
     port: u16,
     veilid_api: Option<VeilidAPI>,
+    update_rx: Option<broadcast::Receiver<VeilidUpdate>>,
     groups: HashMap<CryptoKey, Box<Group>>,
     repos: HashMap<CryptoKey, Box<Repo>>,
 }
@@ -31,6 +32,7 @@ impl Backend {
             path: base_path.to_path_buf(),
             port,
             veilid_api: None,
+            update_rx: None, 
             groups: HashMap::new(),
             repos: HashMap::new(),
         })
@@ -51,22 +53,15 @@ impl Backend {
             )
         })?;
 
-        let (tx, mut rx) = mpsc::channel(1);
+        let (update_tx, update_rx) = broadcast::channel::<VeilidUpdate>(32);
 
         let update_callback: UpdateCallback = Arc::new(move |update| {
-            // Else handle update for something
-            // info!("Received update: {:?}", update);
-            if let VeilidUpdate::Attachment(attachment_state) = &update {
-                if attachment_state.public_internet_ready {
-                    println!("Public internet ready!");
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        if tx.send(()).await.is_err() {
-                            println!("receiver dropped");
-                        }
-                    });
+            let update_tx = update_tx.clone();
+            tokio::spawn(async move {
+                if let Err(e) = update_tx.send(update) {
+                    println!("Failed to send update: {}", e);
                 }
-            }
+            });
         });
 
         let xdg_dirs = BaseDirectories::with_prefix("save-dweb-backend")?;
@@ -111,7 +106,12 @@ impl Backend {
 
         println!("Waiting for network ready state");
 
-        rx.recv().await.expect("Unable to wait for veilid init");
+        self.update_rx = Some(update_rx);
+
+        // Wait for network ready state
+        if let Some(rx) = &self.update_rx {
+            self.wait_for_network(rx.resubscribe()).await?;
+        }
 
         Ok(())
     }
@@ -129,13 +129,25 @@ impl Backend {
         Ok(())
     }
 
+    async fn wait_for_network(&self, mut update_rx: broadcast::Receiver<VeilidUpdate>) -> Result<()> {
+        while let Ok(update) = update_rx.recv().await {
+            if let VeilidUpdate::Attachment(attachment_state) = update {
+                if attachment_state.public_internet_ready {
+                    println!("Public internet ready!");
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+    
     pub async fn create_group(&mut self) -> Result<Group> {
         let veilid = self
             .veilid_api
             .as_ref()
             .ok_or_else(|| anyhow!("Veilid API is not initialized"))?;
         let routing_context = veilid.routing_context()?;
-        let schema = DHTSchema::dflt(1)?;
+        let schema = DHTSchema::dflt(3)?;
         let kind = Some(CRYPTO_KIND_VLD0);
     
         let dht_record = routing_context.create_dht_record(schema, kind).await?;
@@ -234,7 +246,7 @@ impl Backend {
             .as_ref()
             .ok_or_else(|| anyhow!("Veilid API is not initialized"))?;
         let routing_context = veilid.routing_context()?;
-        let schema = DHTSchema::dflt(1)?;
+        let schema = DHTSchema::dflt(3)?;
         let kind = Some(CRYPTO_KIND_VLD0);
 
         let dht_record = routing_context.create_dht_record(schema, kind).await?;
@@ -304,5 +316,13 @@ impl Backend {
         };
 
         Ok(Box::new(repo))
+    }
+
+    pub fn subscribe_updates(&self) -> Option<broadcast::Receiver<VeilidUpdate>> {
+        self.update_rx.as_ref().map(|rx| rx.resubscribe())
+    }    
+
+    pub fn get_veilid_api(&self) -> Option<&VeilidAPI> {
+        self.veilid_api.as_ref()
     }
 }
