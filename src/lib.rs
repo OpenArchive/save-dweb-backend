@@ -89,21 +89,25 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn basic_test() -> Result<()> {
+    async fn group_creation() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
         let port = 8080;
 
         fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
 
         let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
-
         backend.start().await.expect("Unable to start");
+
         let group = backend.create_group().await.expect("Unable to create group");
+        assert!(group.id() != CryptoKey::default(), "Group ID should be set");
 
         group.set_name(TEST_GROUP_NAME).await.expect(UNABLE_TO_SET_GROUP_NAME);
         let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
         assert_eq!(name, TEST_GROUP_NAME);
-
+    
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
         backend.stop().await.expect("Unable to stop");
 
         backend.start().await.expect("Unable to restart");
