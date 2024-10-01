@@ -147,20 +147,36 @@ mod tests {
         backend.stop().await.expect("Unable to stop");
         Ok(())
     }
-        let repo = backend.create_repo().await.expect("Unable to create repo");
-        let repo_key = repo.get_id();
-        let repo_name = "Test Repo";
+    
+    #[tokio::test]
+    #[serial]
+    async fn repo_creation() -> Result<()> {
+        let path = TmpDir::new("test_dweb_backend").await.unwrap();
+        let port = 8080;
 
-        // Set and get repo name
+        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        let repo = backend.create_repo().await.expect("Unable to create repo");
+        
+        let repo_key = repo.get_id();
+        assert!(repo_key != CryptoKey::default(), "Repo ID should be set");
+        let repo_name = "Test Repo";
         repo.set_name(repo_name).await.expect("Unable to set repo name");
+    
         let name = repo.get_name().await.expect("Unable to get repo name");
         assert_eq!(name, repo_name);
 
+        let mut group = backend.create_group().await.expect("Unable to create group");
+        assert!(group.id() != CryptoKey::default(), "Group ID should be set");
+
         // Add repo to group
-        loaded_group.add_repo(repo.clone()).await.expect("Unable to add repo to group");
+        group.add_repo(repo.clone()).await.expect("Unable to add repo to group");
 
         // List known repos
-        let repos = loaded_group.list_repos().await;
+        let repos = group.list_repos().await;
         assert!(repos.contains(&repo_key));
 
         // Retrieve repo by key
@@ -170,6 +186,9 @@ mod tests {
         let retrieved_name = loaded_repo.get_name().await.expect("Unable to get repo name after restart");
         assert_eq!(retrieved_name, repo_name);
 
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
         // Get the update receiver from the backend
         let update_rx = backend.subscribe_updates().expect("Failed to subscribe to updates");
 
