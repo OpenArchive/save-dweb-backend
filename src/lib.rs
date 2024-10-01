@@ -33,7 +33,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn blob_transfer_test() -> Result<()> {
+    async fn blob_transfer() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
         let port = 8080;
     
