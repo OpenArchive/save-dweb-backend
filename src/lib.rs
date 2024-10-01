@@ -9,8 +9,9 @@ use crate::constants::{GROUP_NOT_FOUND, UNABLE_TO_SET_GROUP_NAME, UNABLE_TO_GET_
 
 use crate::backend::Backend;
 use crate::common::{CommonKeypair, DHTEntity};
+
 use veilid_core::{
-    vld0_generate_keypair, TypedKey, CRYPTO_KIND_VLD0, VeilidUpdate, VALID_CRYPTO_KINDS,
+    vld0_generate_keypair, TypedKey, CRYPTO_KIND_VLD0, VeilidUpdate, VALID_CRYPTO_KINDS, CryptoKey,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 use iroh_blobs::Hash;
