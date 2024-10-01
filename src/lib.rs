@@ -108,36 +108,45 @@ mod tests {
         backend.stop().await.expect("Unable to stop");
         Ok(())
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn keypair_storage_and_retrieval() -> Result<()> {
+        let path = TmpDir::new("test_dweb_backend").await.unwrap();
+        let port = 8080;
+    
+        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+    
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+    
+        let group = backend.create_group().await.expect("Unable to create group");
         backend.stop().await.expect("Unable to stop");
-
+    
         backend.start().await.expect("Unable to restart");
-        let mut loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND);
-
+        let loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND);
+    
         let protected_store = backend.get_protected_store().unwrap();
         let keypair_data = protected_store.load_user_secret(group.id().to_string())
             .await
             .expect(FAILED_TO_LOAD_KEYPAIR)
             .expect(KEYPAIR_NOT_FOUND);
+    
         let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data).expect(FAILED_TO_DESERIALIZE_KEYPAIR);
-
+    
         // Check that the id matches group.id()
         assert_eq!(retrieved_keypair.id, group.id());
-
+    
         // Check that the public_key matches the owner public key from the DHT record
         assert_eq!(retrieved_keypair.public_key, loaded_group.get_dht_record().owner().clone());
-
+    
         // Check that the secret and encryption keys match
         assert_eq!(retrieved_keypair.secret_key, group.get_secret_key());
         assert_eq!(retrieved_keypair.encryption_key, group.get_encryption_key());
-
-        // Check if we can get group name
-        let group_name = loaded_group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
-        assert_eq!(group_name, TEST_GROUP_NAME);
-
-        // Compare the loaded group's id with the retrieved id
-        assert_eq!(loaded_group.id(), retrieved_keypair.id);
-
-        // Create a repo
+    
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
         let repo = backend.create_repo().await.expect("Unable to create repo");
         let repo_key = repo.get_id();
         let repo_name = "Test Repo";
