@@ -262,40 +262,27 @@ mod tests {
     }
     
 
-        // After uploading the blob
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    #[tokio::test]
+    #[serial]
+    async fn group_name_persistence() -> Result<()> {
+        let path = TmpDir::new("test_dweb_backend").await.unwrap();
+        let port = 8080;
 
-        // Get the route_id_blob from iroh_blobs
-        let route_id_blob = iroh_blobs.route_id_blob();
+        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
 
-        // Get VeilidAPI instance from backend
-        let veilid_api = backend.get_veilid_api().expect("Failed to get VeilidAPI instance");
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
 
-        // Get update_rx from backend
-        let mut update_rx = backend.subscribe_updates().expect("Failed to get update receiver");
+        let group = backend.create_group().await.expect("Unable to create group");
+        group.set_name(TEST_GROUP_NAME).await.expect(UNABLE_TO_SET_GROUP_NAME);
 
-        // Call download_blob
-        loaded_repo.download_blob(veilid_api, &mut update_rx, route_id_blob, &hash).await?;
+        backend.stop().await.expect("Unable to stop");
 
-        // Retrieve the data from the store
-        let receiver = iroh_blobs
-            .read_file(hash)
-            .await
-            .expect("Failed to get blob");
+        backend.start().await.expect("Unable to restart");
+        let loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND);
 
-        let mut retrieved_data = Vec::new();
-
-        // Read data from the receiver
-        let mut stream = tokio_stream::wrappers::ReceiverStream::new(receiver);
-        while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
-                Ok(bytes) => retrieved_data.extend_from_slice(bytes.as_ref()),
-                Err(e) => panic!("Error reading data: {:?}", e),
-            }
-        }
-
-        // Verify the data
-        assert_eq!(retrieved_data, data_to_upload);
+        let name = loaded_group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
+        assert_eq!(name, TEST_GROUP_NAME);
 
         backend.stop().await.expect("Unable to stop");
         Ok(())
