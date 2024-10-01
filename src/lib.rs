@@ -189,12 +189,30 @@ mod tests {
         backend.stop().await.expect("Unable to stop");
         Ok(())
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn message_sending_via_private_route() -> Result<()> {
+        let path = TmpDir::new("test_dweb_backend").await.unwrap();
+        let port = 8080;
+    
+        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+    
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+    
+        // Add delay to ensure backend initialization
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    
+        let repo = backend.create_repo().await.expect("Unable to create repo");
+        let veilid_api = backend.get_veilid_api().expect("Failed to get VeilidAPI instance");
+    
         // Get the update receiver from the backend
         let update_rx = backend.subscribe_updates().expect("Failed to subscribe to updates");
-
+    
         // Set up a channel to receive AppMessage updates
         let (message_tx, mut message_rx) = mpsc::channel(1);
-
+    
         // Spawn a task to listen for updates
         tokio::spawn(async move {
             let mut rx = update_rx.resubscribe();
@@ -205,12 +223,9 @@ mod tests {
                 }
             }
         });
-
-        // Get VeilidAPI instance from backend
-        let veilid_api = backend.get_veilid_api().expect("Failed to get VeilidAPI instance");
-
+    
         println!("Creating a new custom private route with valid crypto kinds: {:?}", VALID_CRYPTO_KINDS);
-
+    
         // Create a new private route
         let (route_id, route_id_blob) = veilid_api
             .new_custom_private_route(
@@ -220,49 +235,32 @@ mod tests {
             )
             .await
             .expect("Failed to create route");
-
+    
         // Store the route_id_blob in DHT
-        loaded_repo
-            .store_route_id_in_dht(route_id_blob.clone())
+        repo.store_route_id_in_dht(route_id_blob.clone())
             .await
             .expect("Failed to store route ID blob in DHT");
-
+    
         // Define the message to send
         let message = b"Test Message to Repo Owner".to_vec();
-
+    
         println!("Sending message to owner...");
-
+    
         // Send the message
-        loaded_repo
-            .send_message_to_owner(veilid_api, message.clone(), ROUTE_ID_DHT_KEY)
+        repo.send_message_to_owner(veilid_api, message.clone(), ROUTE_ID_DHT_KEY)
             .await
             .expect("Failed to send message to repo owner");
-
-        // Receive the message
+    
+        // Receive the message from the background task
         let received_app_message = message_rx.recv().await.expect("Failed to receive message");
-
+    
         // Verify the message
         assert_eq!(received_app_message.message(), message.as_slice());
-
-        // Access the VeilidIrohBlobs instance
-        let iroh_blobs = repo
-            .iroh_blobs
-            .as_ref()
-            .expect("iroh_blobs not initialized");
-
-        // Upload a blob from data_to_upload
-        let data_to_upload = b"Test data for blob".to_vec();
-
-        // Create a stream (Receiver) from data_to_upload
-        let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
-        tx.send(Ok(Bytes::from(data_to_upload.clone()))).await.unwrap();
-        drop(tx); // Close the sender
-
-        // Upload from stream
-        let hash = iroh_blobs
-            .upload_from_stream(rx)
-            .await
-            .expect("Failed to upload blob");
+    
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
+    
 
         // After uploading the blob
         tokio::time::sleep(Duration::from_millis(100)).await;
