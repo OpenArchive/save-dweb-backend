@@ -192,74 +192,76 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn sending_message_via_private_route() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend").await.unwrap();
-        let port = 8080;
-    
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
-    
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
-    
-        // Add delay to ensure backend initialization
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::timeout(Duration::from_secs(600), async {
+            let path = TmpDir::new("test_dweb_backend").await.unwrap();
+            let port = 8080;
+        
+            fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+        
+            let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+            backend.start().await.expect("Unable to start");
+        
+            // Add delay to ensure backend initialization
+            tokio::time::sleep(Duration::from_secs(2)).await;
 
-        // Create a group and a repo
-        let group = backend.create_group().await.expect("Unable to create group");
-        let repo = backend.create_repo().await.expect("Unable to create repo");
-        let veilid_api = backend.get_veilid_api().expect("Failed to get VeilidAPI instance");
-    
-        // Get the update receiver from the backend
-        let update_rx = backend.subscribe_updates().expect("Failed to subscribe to updates");
-    
-        // Set up a channel to receive AppMessage updates
-        let (message_tx, mut message_rx) = mpsc::channel(1);
-    
-        // Spawn a task to listen for updates
-        tokio::spawn(async move {
-            let mut rx = update_rx.resubscribe();
-            while let Ok(update) = rx.recv().await {
-                if let VeilidUpdate::AppMessage(app_message) = update {
-                    // Optionally, filter by route_id or other criteria
-                    message_tx.send(app_message).await.unwrap();
+            // Create a group and a repo
+            let group = backend.create_group().await.expect("Unable to create group");
+            let repo = backend.create_repo().await.expect("Unable to create repo");
+            let veilid_api = backend.get_veilid_api().expect("Failed to get VeilidAPI instance");
+        
+            // Get the update receiver from the backend
+            let update_rx = backend.subscribe_updates().expect("Failed to subscribe to updates");
+        
+            // Set up a channel to receive AppMessage updates
+            let (message_tx, mut message_rx) = mpsc::channel(1);
+        
+            // Spawn a task to listen for updates
+            tokio::spawn(async move {
+                let mut rx = update_rx.resubscribe();
+                while let Ok(update) = rx.recv().await {
+                    if let VeilidUpdate::AppMessage(app_message) = update {
+                        // Optionally, filter by route_id or other criteria
+                        message_tx.send(app_message).await.unwrap();
+                    }
                 }
-            }
-        });
-    
-        println!("Creating a new custom private route with valid crypto kinds: {:?}", VALID_CRYPTO_KINDS);
-    
-        // Create a new private route
-        let (route_id, route_id_blob) = veilid_api
-            .new_custom_private_route(
-                &VALID_CRYPTO_KINDS,
-                veilid_core::Stability::Reliable,
-                veilid_core::Sequencing::PreferOrdered,
-            )
-            .await
-            .expect("Failed to create route");
-    
-        // Store the route_id_blob in DHT
-        repo.store_route_id_in_dht(route_id_blob.clone())
-            .await
-            .expect("Failed to store route ID blob in DHT");
-    
-        // Define the message to send
-        let message = b"Test Message to Repo Owner".to_vec();
-    
-        println!("Sending message to owner...");
-    
-        // Send the message
-        repo.send_message_to_owner(veilid_api, message.clone(), ROUTE_ID_DHT_KEY)
-            .await
-            .expect("Failed to send message to repo owner");
-    
-        // Receive the message from the background task
-        let received_app_message = message_rx.recv().await.expect("Failed to receive message");
-    
-        // Verify the message
-        assert_eq!(received_app_message.message(), message.as_slice());
-    
-        backend.stop().await.expect("Unable to stop");
-        Ok(())
+            });
+        
+            println!("Creating a new custom private route with valid crypto kinds: {:?}", VALID_CRYPTO_KINDS);
+        
+            // Create a new private route
+            let (route_id, route_id_blob) = veilid_api
+                .new_custom_private_route(
+                    &VALID_CRYPTO_KINDS,
+                    veilid_core::Stability::Reliable,
+                    veilid_core::Sequencing::PreferOrdered,
+                )
+                .await
+                .expect("Failed to create route");
+        
+            // Store the route_id_blob in DHT
+            repo.store_route_id_in_dht(route_id_blob.clone())
+                .await
+                .expect("Failed to store route ID blob in DHT");
+        
+            // Define the message to send
+            let message = b"Test Message to Repo Owner".to_vec();
+        
+            println!("Sending message to owner...");
+        
+            // Send the message
+            repo.send_message_to_owner(veilid_api, message.clone(), ROUTE_ID_DHT_KEY)
+                .await
+                .expect("Failed to send message to repo owner");
+        
+            // Receive the message from the background task
+            let received_app_message = message_rx.recv().await.expect("Failed to receive message");
+        
+            // Verify the message
+            assert_eq!(received_app_message.message(), message.as_slice());
+        
+            backend.stop().await.expect("Unable to stop");
+            Ok(())
+        }).await.expect("Test timed out");
     }
     
 
