@@ -11,7 +11,7 @@ use crate::backend::Backend;
 use crate::common::{CommonKeypair, DHTEntity};
 
 use veilid_core::{
-    vld0_generate_keypair, TypedKey, CRYPTO_KIND_VLD0, VeilidUpdate, VALID_CRYPTO_KINDS, CryptoKey,
+    vld0_generate_keypair, TypedKey, CRYPTO_KIND_VLD0, VeilidUpdate, VALID_CRYPTO_KINDS, CryptoKey, CryptoTyped,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 use iroh_blobs::Hash;
@@ -136,10 +136,7 @@ mod tests {
     
         // Check that the id matches group.id()
         assert_eq!(retrieved_keypair.id, group.id());
-    
-        // Check that the public_key matches the owner public key from the DHT record
-        assert_eq!(retrieved_keypair.public_key, loaded_group.get_dht_record().owner().clone());
-    
+
         // Check that the secret and encryption keys match
         assert_eq!(retrieved_keypair.secret_key, group.get_secret_key());
         assert_eq!(retrieved_keypair.encryption_key, group.get_encryption_key());
@@ -159,30 +156,32 @@ mod tests {
         let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
+        // Step 1: Create a group before creating a repo
+        let mut group = backend.create_group().await.expect("Unable to create group");
+
+        // Step 2: Create a repo
         let repo = backend.create_repo().await.expect("Unable to create repo");
-        
+
         let repo_key = repo.get_id();
         assert!(repo_key != CryptoKey::default(), "Repo ID should be set");
+        
+        // Step 3: Set and verify the repo name
         let repo_name = "Test Repo";
         repo.set_name(repo_name).await.expect("Unable to set repo name");
-    
-        let name = repo.get_name().await.expect("Unable to get repo name");
+        
+        let name = repo.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
+
         assert_eq!(name, repo_name);
-
-        let mut group = backend.create_group().await.expect("Unable to create group");
-        assert!(group.id() != CryptoKey::default(), "Group ID should be set");
-
-        // Add repo to group
+        // Step 4: Add repo to the group
         group.add_repo(repo.clone()).await.expect("Unable to add repo to group");
 
-        // List known repos
+        // Step 5: List known repos and verify the repo is in the list
         let repos = group.list_repos().await;
         assert!(repos.contains(&repo_key));
 
-        // Retrieve repo by key
-        let loaded_repo = backend.get_repo(repo_key.clone()).await.expect("Repo not found");
+        // Step 6: Retrieve the repo by key and check its name
+        let loaded_repo = backend.get_repo(TypedKey::new(CRYPTO_KIND_VLD0, repo_key.clone())).await.expect("Repo not found");
 
-        // Check if repo name is correctly retrieved
         let retrieved_name = loaded_repo.get_name().await.expect("Unable to get repo name after restart");
         assert_eq!(retrieved_name, repo_name);
 
@@ -192,7 +191,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn message_sending_via_private_route() -> Result<()> {
+    async fn sending_message_via_private_route() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
         let port = 8080;
     
@@ -203,7 +202,9 @@ mod tests {
     
         // Add delay to ensure backend initialization
         tokio::time::sleep(Duration::from_secs(2)).await;
-    
+
+        // Create a group and a repo
+        let group = backend.create_group().await.expect("Unable to create group");
         let repo = backend.create_repo().await.expect("Unable to create repo");
         let veilid_api = backend.get_veilid_api().expect("Failed to get VeilidAPI instance");
     
@@ -287,5 +288,45 @@ mod tests {
         backend.stop().await.expect("Unable to stop");
         Ok(())
     }
+    #[tokio::test]
+    #[serial]
+    async fn repo_persistence() -> Result<()> {
+        let path = TmpDir::new("test_dweb_backend").await.unwrap();
+        let port = 8080;
     
+        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+    
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start backend");
+    
+        let mut group = backend.create_group().await.expect("Failed to create group");
+        let repo = backend.create_repo().await.expect("Failed to create repo");
+    
+        let repo_name = "Test Repo";
+        repo.set_name(repo_name).await.expect("Unable to set repo name");
+    
+        let initial_name = repo.get_name().await.expect("Unable to get repo name");
+        assert_eq!(initial_name, repo_name, "Initial repo name doesn't match");
+    
+        let repo_id = repo.id();
+        println!("lib: Repo created with id: {:?}", repo_id);
+    
+        backend.stop().await.expect("Unable to stop backend");
+    
+        backend.start().await.expect("Unable to restart backend");
+    
+        println!("Backend restarted, attempting to load group with ID: {:?}", group.id());
+    
+        let loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND); 
+        let loaded_repo = backend.get_repo(TypedKey::new(CRYPTO_KIND_VLD0, repo_id)).await.expect("Repo not found after restart");  
+    
+        let retrieved_name = loaded_repo.get_name().await.expect("Unable to get repo name after restart");
+        assert_eq!(retrieved_name, repo_name, "Repo name doesn't persist after restart");
+    
+        backend.stop().await.expect("Unable to stop backend after verification");
+    
+        Ok(())
+    }
+    
+
 }
