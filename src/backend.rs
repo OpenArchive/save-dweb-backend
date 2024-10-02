@@ -330,47 +330,31 @@ impl Backend {
 
         Ok(repo)
     }
-
-    pub async fn get_repo(&self, key: CryptoKey) -> Result<Box<Repo>> {
-        if let Some(repo) = self.repos.get(&key) {
+        
+    pub async fn get_repo(&mut self, repo_id: TypedKey) -> Result<Box<Repo>> {
+        if let Some(repo) = self.repos.get(&repo_id.value) {
             return Ok(repo.clone());
         }
-
+    
         let protected_store = self.veilid_api.as_ref().unwrap().protected_store().unwrap();
-        let keypair_data = protected_store
-            .load_user_secret(key.to_string())
+    
+        // Load keypair using the repo ID
+        let retrieved_keypair = CommonKeypair::load_keypair(&protected_store, &repo_id.value)
             .await
-            .map_err(|_| anyhow!("Failed to load keypair"))?
-            .ok_or_else(|| anyhow!("Keypair not found"))?;
-        let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data)
-            .map_err(|_| anyhow!("Failed to deserialize keypair"))?;
-
+            .map_err(|_| anyhow!("Failed to load keypair for repo_id: {:?}", repo_id))?;
         let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
-        let dht_record = if let Some(secret_key) = retrieved_keypair.secret_key.clone() {
-            routing_context
-                .open_dht_record(
-                    CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.public_key.clone()),
-                    Some(KeyPair {
-                        key: retrieved_keypair.public_key.clone(),
-                        secret: secret_key,
-                    }),
-                )
-                .await?
-        } else {
-            routing_context
-                .open_dht_record(
-                    CryptoTyped::new(CRYPTO_KIND_VLD0, retrieved_keypair.public_key.clone()),
-                    None,
-                )
-                .await?
-        };
-
+        let dht_record = routing_context.open_dht_record(repo_id.clone(), None).await?;
+        let owner_key = dht_record.owner();
+        // Reopen the DHT record with the owner key as the writer
+        let dht_record = routing_context
+        .open_dht_record(repo_id.clone(), Some(KeyPair::new(owner_key.clone(), retrieved_keypair.secret_key.clone().unwrap())))
+        .await?;
+    
         let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
-
+    
         let repo = Repo {
-            id: retrieved_keypair.public_key.clone(),
             dht_record,
-            encryption_key: SharedSecret::new([0; 32]),
+            encryption_key: retrieved_keypair.encryption_key.clone(),
             secret_key: retrieved_keypair
                 .secret_key
                 .map(|sk| CryptoTyped::new(CRYPTO_KIND_VLD0, sk)),
@@ -378,7 +362,10 @@ impl Backend {
             crypto_system,
             iroh_blobs: self.iroh_blobs.clone(),
         };
-
+    
+        // Cache the loaded repo for future access
+        self.repos.insert(repo.get_id(), Box::new(repo.clone()));
+    
         Ok(Box::new(repo))
     }
 
