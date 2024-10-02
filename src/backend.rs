@@ -354,11 +354,9 @@ impl Backend {
 }
 
 fn find_query(url: &Url, key: &str) -> Result<String> {
-    let mut pairs = url.query_pairs();
-
-    while let Some((query_key, value)) = pairs.next() {
+    for (query_key, value) in url.query_pairs() {
         if query_key == key {
-            Ok(value.into_owned());
+            return Ok(value.into_owned());
         }
     }
 
