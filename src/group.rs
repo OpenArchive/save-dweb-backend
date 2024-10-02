@@ -1,13 +1,14 @@
 use serde::{Serialize, Deserialize};
 use anyhow::{Result, Error, anyhow};
 use std::path::PathBuf;
+use std::any::Any;
 use iroh_blobs::Hash;
 use std::sync::Arc;
 use veilid_core::{
-    CryptoKey, DHTRecordDescriptor, CryptoTyped, CryptoSystemVLD0, RoutingContext, SharedSecret, TypedKey
+    CryptoKey, DHTRecordDescriptor, CryptoTyped, CryptoSystemVLD0, RoutingContext, SharedSecret, TypedKey, ProtectedStore
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
-use crate::common::DHTEntity;
+use crate::common::{ DHTEntity, DHTRecordInfo };
 use crate::repo::Repo;
 
 #[derive(Clone)]
@@ -67,7 +68,7 @@ impl Group {
         }
     }
 
-    pub async fn upload_blob(&self, file_path: PathBuf) -> Result<Hash> {
+    pub async fn upload_blob(&self, file_path: PathBuf, protected_store: &ProtectedStore) -> Result<Hash> {
         if let Some(iroh_blobs) = &self.iroh_blobs {
             // Upload the file and get the hash
             let hash = iroh_blobs.upload_from_path(file_path).await?;
@@ -79,11 +80,22 @@ impl Group {
             self.routing_context.set_dht_value(
                 self.dht_record.key().clone(), 
                 1,                              
-                root_hash_hex.into(),           
+                root_hash_hex.clone().into(),           
                 None                            
             )
             .await
             .map_err(|e| anyhow!("Failed to store collection blob in DHT: {}", e))?;
+
+            // Create an instance of DHTRecordInfo
+            let dht_record_info = DHTRecordInfo {
+                id: self.get_id().clone(),             
+                dht_key: self.dht_record.key().value, 
+                cid: Some(root_hash_hex),           
+            };
+
+            // Store the DHT record info and CID in the Veilid protected store
+            dht_record_info.store(protected_store).await.map_err(|e| anyhow!("Failed to store DHT record info: {}", e))?;
+
     
             Ok(hash)
         } else {
