@@ -8,7 +8,7 @@ use crate::constants::{GROUP_NOT_FOUND, UNABLE_TO_SET_GROUP_NAME, UNABLE_TO_GET_
  YES, NO, ASK, DATA, DONE};
 
 use crate::backend::Backend;
-use crate::common::{CommonKeypair, DHTEntity};
+use crate::common::{CommonKeypair, DHTEntity, DHTRecordInfo};
 
 use veilid_core::{
     vld0_generate_keypair, TypedKey, CRYPTO_KIND_VLD0, VeilidUpdate, VALID_CRYPTO_KINDS, CryptoKey, CryptoTyped,
@@ -260,7 +260,7 @@ mod tests {
             assert_eq!(received_app_message.message(), message.as_slice());
         
             backend.stop().await.expect("Unable to stop");
-            Ok(())
+            Ok::<(), anyhow::Error>(())
         }).await??;
 
         Ok(())
@@ -331,6 +331,7 @@ mod tests {
     
         Ok(())
     }
+
     #[tokio::test]
     #[serial]
     async fn upload_blob() -> Result<()> {
@@ -351,9 +352,11 @@ mod tests {
         let file_content = b"Test content for file upload";
         fs::write(&tmp_file_path, file_content).await.expect("Failed to write to temp file");
 
+        let protected_store = backend.get_protected_store().unwrap();
+
         // Upload the file as a blob and get the hash
         let hash = group
-            .upload_blob(tmp_file_path.clone())
+            .upload_blob(tmp_file_path.clone(), &protected_store)
             .await
             .expect("Failed to upload blob");
 
@@ -376,6 +379,97 @@ mod tests {
             panic!("No value found in DHT for the given key");
         }
 
+        // Read back the file using the hash
+        let iroh_blobs = group.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
+        let receiver = iroh_blobs
+            .read_file(hash.clone())
+            .await
+            .expect("Failed to read blob");
+
+        // Retrieve the data from the receiver
+        let mut retrieved_data = Vec::new();
+        let mut stream = ReceiverStream::new(receiver);
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(bytes) => retrieved_data.extend_from_slice(bytes.as_ref()),
+                Err(e) => panic!("Error reading data: {:?}", e),
+            }
+        }
+
+        // Verify that the downloaded data matches the original file content
+        assert_eq!(retrieved_data, file_content);
+
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
+    #[tokio::test]
+    #[serial]
+    async fn upload_blob_and_verify_protected_store() -> Result<()> {
+        let path = TmpDir::new("test_dweb_backend_upload_blob").await.unwrap();
+        let port = 8081;
+
+        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+
+        // Initialize the backend
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        // Create a group
+        let group = backend.create_group().await.expect("Unable to create group");
+
+        // Prepare a temporary file to upload as a blob
+        let tmp_file_path = path.as_ref().join("test_blob_file.txt");
+        let file_content = b"Test content for file upload";
+        fs::write(&tmp_file_path, file_content).await.expect("Failed to write to temp file");
+
+        let protected_store = backend.get_protected_store().unwrap();
+
+        // Upload the file as a blob and get the hash
+        let hash = group
+            .upload_blob(tmp_file_path.clone(), &protected_store)
+            .await
+            .expect("Failed to upload blob");
+
+        // Verify that the file was uploaded and the hash was written to the DHT
+        let dht_value = backend    
+            .get_veilid_api()
+            .expect("veilid_api not initialized")
+            .routing_context()
+            .expect("Failed to get routing context")
+            .get_dht_value(group.dht_record.key().clone(), 1, false)
+            .await
+            .expect("Failed to retrieve DHT value");
+
+        if let Some(dht_value_data) = dht_value {
+            // Use the data() method to extract the byte slice
+            let dht_value_bytes = dht_value_data.data();
+            let dht_value_str = String::from_utf8(dht_value_bytes.to_vec()).expect("Failed to convert ValueData to String");
+            assert_eq!(dht_value_str, hash.to_hex());
+        } else {
+            panic!("No value found in DHT for the given key");
+        }
+
+        // Now verify that the hash was properly stored in the ProtectedStore
+        let protected_store = backend.get_veilid_api()
+            .expect("veilid_api not initialized")
+            .protected_store()
+            .expect("Failed to get protected store");
+
+            let stored_dht_info = DHTRecordInfo::load(&protected_store, &group.id())
+            .await
+            .expect("Failed to load DHT info from protected store");
+        
+        println!("DHT Record Info found: {:?}", stored_dht_info);
+        
+        // Check if CID exists
+        assert!(stored_dht_info.cid.is_some(), "DHT info not found in the protected store");
+    
+        // Validate that the group ID and DHT record key were correctly stored
+        assert_eq!(stored_dht_info.id, group.id());
+        assert_eq!(stored_dht_info.dht_key, group.dht_record.key().value);
+        
+        // Validate the CID (collection hash)
+        assert_eq!(stored_dht_info.cid, Some(hash.to_hex()));
         // Read back the file using the hash
         let iroh_blobs = group.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
         let receiver = iroh_blobs
