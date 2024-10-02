@@ -16,7 +16,6 @@ use crate::constants::{ASK, DATA, DONE, YES, NO, ERR};
 
 #[derive(Clone)]
 pub struct Repo {
-    pub id: CryptoKey,
     pub dht_record: DHTRecordDescriptor,
     pub encryption_key: SharedSecret,
     pub secret_key: Option<CryptoTyped<CryptoKey>>,
@@ -27,7 +26,6 @@ pub struct Repo {
 
 impl Repo {
     pub fn new(
-        id: CryptoKey,
         dht_record: DHTRecordDescriptor,
         encryption_key: SharedSecret,
         secret_key: Option<CryptoTyped<CryptoKey>>,
@@ -36,7 +34,6 @@ impl Repo {
         iroh_blobs: Option<VeilidIrohBlobs>,
     ) -> Self {
         Self {
-            id,
             dht_record,
             encryption_key,
             secret_key,
@@ -44,6 +41,10 @@ impl Repo {
             crypto_system,
             iroh_blobs,
         }
+    }
+
+    pub fn id(&self) -> CryptoKey {
+        self.dht_record.key().value.clone()
     }
 
     pub fn get_write_key(&self) -> Option<CryptoKey> {
@@ -74,7 +75,7 @@ impl Repo {
 
 impl DHTEntity for Repo {
     fn get_id(&self) -> CryptoKey {
-        self.id.clone()
+        self.id().clone()
     }
 
     fn get_encryption_key(&self) -> SharedSecret {
