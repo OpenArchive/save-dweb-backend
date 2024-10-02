@@ -69,7 +69,22 @@ impl Group {
 
     pub async fn upload_blob(&self, file_path: PathBuf) -> Result<Hash> {
         if let Some(iroh_blobs) = &self.iroh_blobs {
+            // Upload the file and get the hash
             let hash = iroh_blobs.upload_from_path(file_path).await?;
+            
+            // Convert hash to hex for DHT storage
+            let root_hash_hex = hash.to_hex();
+
+            // Set the root hash in the DHT record
+            self.routing_context.set_dht_value(
+                self.dht_record.key().clone(), 
+                1,                              
+                root_hash_hex.into(),           
+                None                            
+            )
+            .await
+            .map_err(|e| anyhow!("Failed to store collection blob in DHT: {}", e))?;
+    
             Ok(hash)
         } else {
             Err(anyhow!("iroh_blobs not initialized"))
