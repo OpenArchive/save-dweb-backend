@@ -89,7 +89,7 @@ impl Group {
                 self.owner_secret().unwrap().encode_hex::<String>().as_str(),
             );
 
-        return url.to_string();
+        url.to_string()
     }
 }
 
