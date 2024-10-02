@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+iroh = "0.24.0"
 iroh-blobs = "0.24.0"
 veilid-core = { git = "https://gitlab.com/veilid/veilid.git", branch = "main" }
 veilid-iroh-blobs = { git = "https://github.com/RangerMauve/veilid-iroh-blobs.git", branch = "initial" }
