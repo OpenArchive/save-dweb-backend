@@ -261,7 +261,9 @@ mod tests {
         
             backend.stop().await.expect("Unable to stop");
             Ok(())
-        }).await.expect("Test timed out");
+        }).await??;
+
+        Ok(())
     }
     
 
