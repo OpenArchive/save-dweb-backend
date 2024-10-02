@@ -52,6 +52,27 @@ impl CommonKeypair {
         Ok(retrieved_keypair)
     }
 }
+#[derive(Debug)]
+#[derive(Serialize, Deserialize)]
+pub struct DHTRecordInfo {
+    pub id: CryptoKey,
+    pub dht_key: CryptoKey,
+    pub cid: Option<String>, // CID of the collection
+}
+
+impl DHTRecordInfo {
+    pub async fn store(&self, protected_store: &ProtectedStore) -> Result<()> {
+        let record_data = serde_cbor::to_vec(&self).map_err(|e| anyhow!("Failed to serialize DHT record info: {}", e))?;
+        protected_store.save_user_secret(self.id.to_string(), &record_data).await.map_err(|e| anyhow!("Unable to store DHT record info: {}", e))?;
+        Ok(())
+    }
+
+    pub async fn load(protected_store: &ProtectedStore, id: &CryptoKey) -> Result<Self> {
+        let record_data = protected_store.load_user_secret(id.to_string()).await.map_err(|_| anyhow!("Failed to load DHT record info"))?.ok_or_else(|| anyhow!("DHT record info not found"))?;
+        let retrieved_info: DHTRecordInfo = serde_cbor::from_slice(&record_data).map_err(|_| anyhow!("Failed to deserialize DHT record info"))?;
+        Ok(retrieved_info)
+    }
+}
 
 
 pub trait DHTEntity {
