@@ -195,6 +195,7 @@ impl Backend {
         let protected_store = veilid.protected_store().unwrap();
         CommonKeypair {
             id: group.id(), 
+            public_key: dht_record.owner().clone(),
             secret_key: group.get_secret_key(),
             encryption_key: group.get_encryption_key(),
         }
@@ -318,6 +319,7 @@ impl Backend {
          let protected_store = veilid.protected_store().unwrap();
          CommonKeypair {
              id: repo.id(),
+             public_key: repo_dht_record.owner().clone(),
              secret_key:  group.get_secret_key(),
              encryption_key: encryption_key.clone(),
          }
