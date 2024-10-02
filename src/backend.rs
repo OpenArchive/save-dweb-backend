@@ -153,7 +153,7 @@ impl Backend {
 
     pub async fn join_from_url(&mut self, url_string: &str) -> Result<Box<Group>> {
         let keys = parse_url(url_string)?;
-        return self.join_group(keys).await;
+        self.join_group(keys).await;
     }
 
     pub async fn join_group(&mut self, keys: CommonKeypair) -> Result<Box<Group>> {
@@ -243,7 +243,7 @@ impl Backend {
             .await
             .map_err(|_| anyhow!("Failed to load keypair"))?;
 
-        return self.join_group(retrieved_keypair).await;
+        self.join_group(retrieved_keypair).await;
     }
 
     pub async fn list_groups(&self) -> Result<Vec<Box<Group>>> {
@@ -358,11 +358,11 @@ fn find_query(url: &Url, key: &str) -> Result<String> {
 
     while let Some((query_key, value)) = pairs.next() {
         if query_key == key {
-            return Ok(value.into_owned());
+            Ok(value.into_owned());
         }
     }
 
-    return Err(anyhow!("Unable to find parameter {} in URL {:?}", key, url));
+    Err(anyhow!("Unable to find parameter {} in URL {:?}", key, url));
 }
 
 fn crypto_key_from_query(url: &Url, key: &str) -> Result<CryptoKey> {
@@ -372,7 +372,7 @@ fn crypto_key_from_query(url: &Url, key: &str) -> Result<CryptoKey> {
     key_vec.copy_from_slice(bytes.as_slice());
 
     let key = CryptoKey::from(key_vec);
-    return Ok(key);
+    Ok(key);
 }
 
 pub fn parse_url(url_string: &str) -> Result<CommonKeypair> {
@@ -383,7 +383,7 @@ pub fn parse_url(url_string: &str) -> Result<CommonKeypair> {
     let public_key = crypto_key_from_query(&url, URL_PUBLIC_KEY)?;
     let secret_key = Some(crypto_key_from_query(&url, URL_SECRET_KEY)?);
 
-    return Ok(CommonKeypair {
+    Ok(CommonKeypair {
         id,
         public_key,
         secret_key,
