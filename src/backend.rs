@@ -275,23 +275,56 @@ impl Backend {
             .as_ref()
             .ok_or_else(|| anyhow!("Veilid API is not initialized"))?;
         let routing_context = veilid.routing_context()?;
-        let schema = DHTSchema::dflt(3)?;
-        let kind = Some(CRYPTO_KIND_VLD0);
+    
+        // Identify the group to use for the repo
+        let group_key = self.groups.keys().next().ok_or_else(|| anyhow!("No group available"))?;
+        
+        // Retrieve the group from the Backend's groups map
+        let group = self.groups.get(group_key)
+            .ok_or_else(|| anyhow!("Failed to retrieve group"))?
+            .as_ref();
+    
+        // Check if the repo already exists
+        if let Some(existing_repo) = self.repos.get(&group.get_id()) {
+            println!("Repo already exists with id: {}", existing_repo.get_id());
+            return Ok(*existing_repo.clone());
+        }
+        
+        // Create a new DHT record for the repo
+        let schema = DHTSchema::dflt(3)?;  
+        let kind = Some(CRYPTO_KIND_VLD0);  
+        let repo_dht_record = routing_context.create_dht_record(schema, kind).await?;
 
-        let dht_record = routing_context.create_dht_record(schema, kind).await?;
-        let keypair = vld0_generate_keypair();
-        let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
-        let encryption_key = crypto_system.random_shared_secret();
+        // Identify the repo with the DHT record's key
+        let repo_id = repo_dht_record.key().clone();
+
+        // Use the group's encryption key for the repo
+        let encryption_key = group.get_encryption_key().clone();
+
+        // Wrap the secret key in CryptoTyped for storage
+        let secret_key_typed = CryptoTyped::new(CRYPTO_KIND_VLD0, group.get_secret_key().unwrap().clone());
+
 
         let repo = Repo::new(
-            keypair.key.clone(),
-            dht_record,
-            encryption_key,
-            Some(CryptoTyped::new(CRYPTO_KIND_VLD0, keypair.secret)),
+            repo_dht_record.clone(),
+            group.get_encryption_key().clone(),
+            Some(secret_key_typed),
             Arc::new(routing_context),
-            crypto_system,
+            CryptoSystemVLD0::new(veilid.crypto()?),
             self.iroh_blobs.clone(),
         );
+
+         // Store the repo's keypair in the protected store
+         let protected_store = veilid.protected_store().unwrap();
+         CommonKeypair {
+             id: repo.id(),
+             secret_key:  group.get_secret_key(),
+             encryption_key: encryption_key.clone(),
+         }
+         .store_keypair(&protected_store)
+         .await
+         .map_err(|e| anyhow!(e))?;
+
 
         self.repos.insert(repo.get_id(), Box::new(repo.clone()));
 
