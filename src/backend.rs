@@ -3,6 +3,7 @@ use crate::group::Group;
 use crate::repo::Repo;
 use anyhow::{anyhow, Result};
 use iroh_blobs::Hash;
+use iroh::node::Node;
 use std::collections::HashMap;
 use std::mem;
 use std::path::{Path, PathBuf};
@@ -16,6 +17,8 @@ use veilid_core::{
     VeilidAPI, VeilidConfigInner, VeilidUpdate, CRYPTO_KIND_VLD0, TypedKey, VeilidConfigProtectedStore
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
+use iroh_blobs::format::collection::Collection;
+use iroh_blobs::util::SetTagOption;
 use xdg::BaseDirectories;
 
 pub struct Backend {
@@ -183,7 +186,21 @@ impl Backend {
         let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
     
         let encryption_key = crypto_system.random_shared_secret();
+
+        // Create an empty Iroh collection and get the root hash.
+        let root_hash = self.create_collection().await?;
+
+        // Set the root hash in the DHT record
+        routing_context.set_dht_value(
+                dht_record.key().clone(),
+                1, 
+                root_hash.to_hex().into(),
+                None,
+            )
+            .await
+            .map_err(|e| anyhow!("Failed to store collection blob in DHT: {}", e))?;
     
+
         let group = Group::new(
             dht_record.clone(),
             encryption_key,
@@ -369,6 +386,31 @@ impl Backend {
         self.repos.insert(repo.get_id(), Box::new(repo.clone()));
     
         Ok(Box::new(repo))
+    }
+
+    pub async fn create_collection(&self) -> Result<Hash> {
+        // Initialize a new Iroh Node in memory
+        let node = Node::memory().spawn().await?;
+
+        // Get the Client from the node
+        let iroh_client = node.client().blobs();
+
+        // Create an empty Collection
+        let mut collection = Collection::default();
+        
+        // Tag options for creating the collection
+        let tag_option = SetTagOption::Auto;
+
+        // No tags to delete, so we pass an empty vector
+        let tags_to_delete = Vec::new();
+
+        // Use the iroh_client instance to create the collection and get the root hash
+        let (root_hash, _tag) = iroh_client
+            .create_collection(collection, tag_option, tags_to_delete)
+            .await?;
+
+        // Return the root hash
+        Ok(root_hash)
     }
 
     pub fn subscribe_updates(&self) -> Option<broadcast::Receiver<VeilidUpdate>> {
