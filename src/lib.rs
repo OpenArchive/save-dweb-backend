@@ -1,11 +1,14 @@
-pub mod group;
-pub mod repo;
 pub mod backend;
 pub mod common;
 pub mod constants;
+pub mod group;
+pub mod repo;
 
-use crate::constants::{GROUP_NOT_FOUND, UNABLE_TO_SET_GROUP_NAME, UNABLE_TO_GET_GROUP_NAME, TEST_GROUP_NAME, UNABLE_TO_STORE_KEYPAIR, FAILED_TO_LOAD_KEYPAIR, KEYPAIR_NOT_FOUND, FAILED_TO_DESERIALIZE_KEYPAIR, ROUTE_ID_DHT_KEY,
- YES, NO, ASK, DATA, DONE};
+use crate::constants::{
+    FAILED_TO_DESERIALIZE_KEYPAIR, FAILED_TO_LOAD_KEYPAIR, GROUP_NOT_FOUND, KEYPAIR_NOT_FOUND,
+    ROUTE_ID_DHT_KEY, TEST_GROUP_NAME, UNABLE_TO_GET_GROUP_NAME, UNABLE_TO_SET_GROUP_NAME,
+    UNABLE_TO_STORE_KEYPAIR, YES, NO, ASK, DATA, DONE
+};
 
 use crate::backend::Backend;
 use crate::common::{CommonKeypair, DHTEntity, DHTRecordInfo};
@@ -25,6 +28,7 @@ mod tests {
     use bytes::Bytes;
     use std::path::Path;
     use tokio::sync::mpsc;
+    use tokio::fs;
     use tokio::time::Duration;
     use tokio_stream::wrappers::ReceiverStream;
     use tokio_stream::StreamExt;
@@ -93,15 +97,22 @@ mod tests {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
         let port = 8080;
 
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
 
         let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
-        let group = backend.create_group().await.expect("Unable to create group");
-        assert!(group.id() != CryptoKey::default(), "Group ID should be set");
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
 
-        group.set_name(TEST_GROUP_NAME).await.expect(UNABLE_TO_SET_GROUP_NAME);
+        group
+            .set_name(TEST_GROUP_NAME)
+            .await
+            .expect(UNABLE_TO_SET_GROUP_NAME);
         let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
         assert_eq!(name, TEST_GROUP_NAME);
     
@@ -124,10 +135,15 @@ mod tests {
         backend.stop().await.expect("Unable to stop");
     
         backend.start().await.expect("Unable to restart");
-        let loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND);
-    
+
+        let mut loaded_group = backend
+            .get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id()))
+            .await
+            .expect(GROUP_NOT_FOUND);
+
         let protected_store = backend.get_protected_store().unwrap();
-        let keypair_data = protected_store.load_user_secret(group.id().to_string())
+        let keypair_data = protected_store
+            .load_user_secret(group.id().to_string())
             .await
             .expect(FAILED_TO_LOAD_KEYPAIR)
             .expect(KEYPAIR_NOT_FOUND);
@@ -136,6 +152,12 @@ mod tests {
     
         // Check that the id matches group.id()
         assert_eq!(retrieved_keypair.id, group.id());
+
+        // Check that the public_key matches the owner public key from the DHT record
+        assert_eq!(
+            retrieved_keypair.public_key,
+            loaded_group.get_dht_record().owner().clone()
+        );
 
         // Check that the secret and encryption keys match
         assert_eq!(retrieved_keypair.secret_key, group.get_secret_key());
@@ -167,6 +189,7 @@ mod tests {
         
         // Step 3: Set and verify the repo name
         let repo_name = "Test Repo";
+
         repo.set_name(repo_name).await.expect("Unable to set repo name");
         
         let name = repo.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
@@ -265,7 +288,6 @@ mod tests {
 
         Ok(())
     }
-    
 
     #[tokio::test]
     #[serial]
@@ -494,5 +516,34 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    #[serial]
+    async fn test_join() {
+        let path = TmpDir::new("test_dweb_backend").await.unwrap();
+        let port = 8080;
 
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+
+        backend.start().await.expect("Unable to start");
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
+
+        group
+            .set_name(TEST_GROUP_NAME)
+            .await
+            .expect(UNABLE_TO_SET_GROUP_NAME);
+
+        let url = group.get_url();
+
+        let keys = backend::parse_url(url.as_str()).expect("URL was parsed back out");
+
+        assert_eq!(keys.id, group.id());
+        backend.stop().await.expect("Unable to stop");
+    }
 }

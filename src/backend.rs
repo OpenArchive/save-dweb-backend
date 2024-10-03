@@ -1,7 +1,8 @@
 use crate::common::{CommonKeypair, DHTEntity, make_route};
-use crate::group::Group;
+use crate::group::{Group, URL_DHT_KEY, URL_ENCRYPTION_KEY, URL_PUBLIC_KEY, URL_SECRET_KEY};
 use crate::repo::Repo;
 use anyhow::{anyhow, Result};
+use clap::builder::Str;
 use iroh_blobs::Hash;
 use iroh::node::Node;
 use std::collections::HashMap;
@@ -9,12 +10,18 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
-use tokio::sync::{mpsc::{self, Receiver}, oneshot, broadcast};
+use tokio::sync::{
+    broadcast,
+    mpsc::{self, Receiver},
+    oneshot,
+};
 use tracing::info;
+use url::Url;
 use veilid_core::{
     api_startup_config, vld0_generate_keypair, CryptoKey, CryptoSystem, CryptoSystemVLD0,
-    CryptoTyped, DHTSchema, KeyPair, ProtectedStore, RoutingContext, SharedSecret, UpdateCallback,
-    VeilidAPI, VeilidConfigInner, VeilidUpdate, CRYPTO_KIND_VLD0, TypedKey, VeilidConfigProtectedStore
+    CryptoTyped, DHTSchema, KeyPair, ProtectedStore, RoutingContext, SharedSecret, TypedKey,
+    UpdateCallback, VeilidAPI, VeilidConfigInner, VeilidConfigProtectedStore, VeilidUpdate,
+    CRYPTO_KEY_LENGTH, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 use iroh_blobs::format::collection::Collection;
@@ -37,7 +44,7 @@ impl Backend {
             path: base_path.to_path_buf(),
             port,
             veilid_api: None,
-            update_rx: None, 
+            update_rx: None,
             groups: HashMap::new(),
             repos: HashMap::new(),
             iroh_blobs: None,
@@ -160,7 +167,10 @@ impl Backend {
         Ok(())
     }
 
-    async fn wait_for_network(&self, mut update_rx: broadcast::Receiver<VeilidUpdate>) -> Result<()> {
+    async fn wait_for_network(
+        &self,
+        mut update_rx: broadcast::Receiver<VeilidUpdate>,
+    ) -> Result<()> {
         while let Ok(update) = update_rx.recv().await {
             if let VeilidUpdate::Attachment(attachment_state) = update {
                 if attachment_state.public_internet_ready {
@@ -171,7 +181,48 @@ impl Backend {
         }
         Ok(())
     }
-    
+
+    pub async fn join_from_url(&mut self, url_string: &str) -> Result<Box<Group>> {
+        let keys = parse_url(url_string)?;
+        self.join_group(keys).await
+    }
+
+    pub async fn join_group(&mut self, keys: CommonKeypair) -> Result<Box<Group>> {
+        let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
+        let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
+
+        let record_key = TypedKey::new(CRYPTO_KIND_VLD0, keys.id);
+        // First open the DHT record
+        let dht_record = routing_context
+            .open_dht_record(record_key.clone(), None) // Don't pass a writer here yet
+            .await?;
+
+        // Use the owner key from the DHT record as the default writer
+        let owner_key = dht_record.owner(); // Call the owner() method to get the owner key
+
+        // Reopen the DHT record with the owner key as the writer
+        let dht_record = routing_context
+            .open_dht_record(
+                record_key.clone(),
+                Some(KeyPair::new(
+                    owner_key.clone(),
+                    keys.secret_key.clone().unwrap(),
+                )),
+            )
+            .await?;
+
+        let group = Group {
+            dht_record: dht_record.clone(),
+            encryption_key: keys.encryption_key.clone(),
+            routing_context: Arc::new(routing_context),
+            crypto_system,
+            repos: Vec::new(),
+        };
+        self.groups.insert(group.id(), Box::new(group.clone()));
+
+        Ok(Box::new(group))
+    }
+
     pub async fn create_group(&mut self) -> Result<Group> {
         let veilid = self
             .veilid_api
@@ -180,11 +231,11 @@ impl Backend {
         let routing_context = veilid.routing_context()?;
         let schema = DHTSchema::dflt(3)?;
         let kind = Some(CRYPTO_KIND_VLD0);
-    
+
         let dht_record = routing_context.create_dht_record(schema, kind).await?;
         let keypair = vld0_generate_keypair();
         let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
-    
+
         let encryption_key = crypto_system.random_shared_secret();
 
         // Create an empty Iroh collection and get the root hash.
@@ -200,7 +251,6 @@ impl Backend {
             .await
             .map_err(|e| anyhow!("Failed to store collection blob in DHT: {}", e))?;
     
-
         let group = Group::new(
             dht_record.clone(),
             encryption_key,
@@ -208,10 +258,10 @@ impl Backend {
             crypto_system,
             self.iroh_blobs.clone(),
         );
-    
+
         let protected_store = veilid.protected_store().unwrap();
         CommonKeypair {
-            id: group.id(), 
+            id: group.id(),
             public_key: dht_record.owner().clone(),
             secret_key: group.get_secret_key(),
             encryption_key: group.get_encryption_key(),
@@ -219,9 +269,9 @@ impl Backend {
         .store_keypair(&protected_store)
         .await
         .map_err(|e| anyhow!(e))?;
-    
+
         self.groups.insert(group.id(), Box::new(group.clone()));
-    
+
         Ok(group)
     }
 
@@ -229,10 +279,10 @@ impl Backend {
         if let Some(group) = self.groups.get(&record_key.value) {
             return Ok(group.clone());
         }
-    
+
         let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
         let protected_store = self.veilid_api.as_ref().unwrap().protected_store().unwrap();
-    
+
         // Load the keypair associated with the record_key from the protected store
         let retrieved_keypair = CommonKeypair::load_keypair(&protected_store, &record_key.value)
             .await
@@ -265,6 +315,8 @@ impl Backend {
         self.groups.insert(group.id(), Box::new(group.clone()));
     
         Ok(Box::new(group))
+
+        self.join_group(retrieved_keypair).await
     }
 
     pub async fn list_groups(&self) -> Result<Vec<Box<Group>>> {
@@ -415,9 +467,45 @@ impl Backend {
 
     pub fn subscribe_updates(&self) -> Option<broadcast::Receiver<VeilidUpdate>> {
         self.update_rx.as_ref().map(|rx| rx.resubscribe())
-    }    
+    }
 
     pub fn get_veilid_api(&self) -> Option<&VeilidAPI> {
         self.veilid_api.as_ref()
     }
+}
+
+fn find_query(url: &Url, key: &str) -> Result<String> {
+    for (query_key, value) in url.query_pairs() {
+        if query_key == key {
+            return Ok(value.into_owned());
+        }
+    }
+
+    Err(anyhow!("Unable to find parameter {} in URL {:?}", key, url))
+}
+
+fn crypto_key_from_query(url: &Url, key: &str) -> Result<CryptoKey> {
+    let value = find_query(url, key)?;
+    let bytes = hex::decode(value)?;
+    let mut key_vec: [u8; CRYPTO_KEY_LENGTH] = [0; CRYPTO_KEY_LENGTH];
+    key_vec.copy_from_slice(bytes.as_slice());
+
+    let key = CryptoKey::from(key_vec);
+    Ok(key)
+}
+
+pub fn parse_url(url_string: &str) -> Result<CommonKeypair> {
+    let url = Url::parse(url_string)?;
+
+    let id = crypto_key_from_query(&url, URL_DHT_KEY)?;
+    let encryption_key = crypto_key_from_query(&url, URL_ENCRYPTION_KEY)?;
+    let public_key = crypto_key_from_query(&url, URL_PUBLIC_KEY)?;
+    let secret_key = Some(crypto_key_from_query(&url, URL_SECRET_KEY)?);
+
+    Ok(CommonKeypair {
+        id,
+        public_key,
+        secret_key,
+        encryption_key,
+    })
 }
