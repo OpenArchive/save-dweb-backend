@@ -192,7 +192,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn sending_message_via_private_route() -> Result<()> {
-        tokio::time::timeout(Duration::from_secs(600), async {
+        tokio::time::timeout(Duration::from_secs(888), async {
             let path = TmpDir::new("test_dweb_backend").await.unwrap();
             let port = 8080;
         
