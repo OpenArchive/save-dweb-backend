@@ -28,7 +28,6 @@ mod tests {
     use bytes::Bytes;
     use std::path::Path;
     use tokio::sync::mpsc;
-    use tokio::fs;
     use tokio::time::Duration;
     use tokio_stream::wrappers::ReceiverStream;
     use tokio_stream::StreamExt;
