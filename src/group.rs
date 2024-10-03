@@ -3,7 +3,6 @@ use anyhow::{Result, Error, anyhow};
 use std::path::PathBuf;
 use std::any::Any;
 use iroh_blobs::Hash;
-use eyre::{anyhow, Error, Result};
 use hex::ToHex;
 use std::sync::Arc;
 use url::Url;
