@@ -217,6 +217,7 @@ impl Backend {
             routing_context: Arc::new(routing_context),
             crypto_system,
             repos: Vec::new(),
+            iroh_blobs: self.iroh_blobs.clone(),
         };
         self.groups.insert(group.id(), Box::new(group.clone()));
 
@@ -313,10 +314,10 @@ impl Backend {
             iroh_blobs: self.iroh_blobs.clone(),
         };
         self.groups.insert(group.id(), Box::new(group.clone()));
-    
-        Ok(Box::new(group))
 
-        self.join_group(retrieved_keypair).await
+        let _ =self.join_group(retrieved_keypair).await;
+
+        Ok(Box::new(group))
     }
 
     pub async fn list_groups(&self) -> Result<Vec<Box<Group>>> {
