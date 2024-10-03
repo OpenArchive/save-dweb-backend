@@ -17,3 +17,5 @@ anyhow = "1.0.86"
 tokio = {version ="1.39.3", features=["full"] }
 async-stream = "0.3.5"
 futures-core = "0.3.30"
+url = "2.5.2"
+hex = "0.4.3"
