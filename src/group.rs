@@ -1,17 +1,18 @@
-use serde::{Serialize, Deserialize};
-use anyhow::{Result, Error, anyhow};
-use std::path::PathBuf;
-use std::any::Any;
-use iroh_blobs::Hash;
+use crate::common::DHTEntity;
+use crate::repo::Repo;
+use anyhow::{anyhow, Error, Result};
 use hex::ToHex;
+use iroh_blobs::Hash;
+use serde::{Deserialize, Serialize};
+use std::any::Any;
+use std::path::PathBuf;
 use std::sync::Arc;
 use url::Url;
 use veilid_core::{
-    CryptoKey, DHTRecordDescriptor, CryptoTyped, CryptoSystemVLD0, RoutingContext, SharedSecret, TypedKey, ProtectedStore
+    CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, ProtectedStore, RoutingContext,
+    SharedSecret, TypedKey,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
-use crate::common::{ DHTEntity, DHTRecordInfo };
-use crate::repo::Repo;
 
 pub const PROTOCOL_SCHEME: &str = "save+dweb:";
 pub const URL_DHT_KEY: &str = "dht";
@@ -42,7 +43,7 @@ impl Group {
             encryption_key,
             routing_context,
             crypto_system,
-            repos: Vec::new(), 
+            repos: Vec::new(),
             iroh_blobs,
         }
     }
@@ -73,41 +74,6 @@ impl Group {
             repo.get_name().await
         } else {
             Err(anyhow!("Repo not found"))
-        }
-    }
-
-    pub async fn upload_blob(&self, file_path: PathBuf, protected_store: &ProtectedStore) -> Result<Hash> {
-        if let Some(iroh_blobs) = &self.iroh_blobs {
-            // Upload the file and get the hash
-            let hash = iroh_blobs.upload_from_path(file_path).await?;
-            
-            // Convert hash to hex for DHT storage
-            let root_hash_hex = hash.to_hex();
-
-            // Set the root hash in the DHT record
-            self.routing_context.set_dht_value(
-                self.dht_record.key().clone(), 
-                1,                              
-                root_hash_hex.clone().into(),           
-                None                            
-            )
-            .await
-            .map_err(|e| anyhow!("Failed to store collection blob in DHT: {}", e))?;
-
-            // Create an instance of DHTRecordInfo
-            let dht_record_info = DHTRecordInfo {
-                id: self.get_id().clone(),             
-                dht_key: self.dht_record.key().value, 
-                cid: Some(root_hash_hex),           
-            };
-
-            // Store the DHT record info and CID in the Veilid protected store
-            dht_record_info.store(protected_store).await.map_err(|e| anyhow!("Failed to store DHT record info: {}", e))?;
-
-    
-            Ok(hash)
-        } else {
-            Err(anyhow!("iroh_blobs not initialized"))
         }
     }
 
@@ -156,9 +122,5 @@ impl DHTEntity for Group {
 
     fn get_secret_key(&self) -> Option<CryptoKey> {
         self.owner_secret()
-    }
-
-    fn get_route_id_blob(&self) -> Vec<u8> {
-        self.iroh_blobs.as_ref().expect("iroh_blobs not initialized").route_id_blob()
     }
 }

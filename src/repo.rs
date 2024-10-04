@@ -1,18 +1,21 @@
 use crate::common::DHTEntity;
+use anyhow::{anyhow, Result};
 use async_stream::stream;
-use anyhow::{Result, anyhow};
+use bytes::{BufMut, Bytes, BytesMut};
 use futures_core::stream::Stream;
-use std::sync::Arc;
-use std::io::ErrorKind;
-use tokio::sync::{mpsc, broadcast};
-use bytes::{Bytes, BytesMut, BufMut};
-use veilid_core::{
-    CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, RoutingContext, SharedSecret, VeilidAPI, Target, VeilidUpdate,
-};
 use iroh_blobs::Hash;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::{io::ErrorKind, path::PathBuf};
+use tokio::sync::{broadcast, mpsc};
+use veilid_core::{
+    CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, ProtectedStore, RoutingContext,
+    SharedSecret, Target, VeilidAPI, VeilidUpdate,
+};
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 
-use crate::constants::{ASK, DATA, DONE, YES, NO, ERR};
+pub const HASH_SUBKEY: u32 = 1;
+pub const ROUTE_SUBKEY: u32 = 2;
 
 #[derive(Clone)]
 pub struct Repo {
@@ -21,7 +24,7 @@ pub struct Repo {
     pub secret_key: Option<CryptoTyped<CryptoKey>>,
     pub routing_context: Arc<RoutingContext>,
     pub crypto_system: CryptoSystemVLD0,
-    pub iroh_blobs: Option<VeilidIrohBlobs>,
+    pub iroh_blobs: VeilidIrohBlobs,
 }
 
 impl Repo {
@@ -31,7 +34,7 @@ impl Repo {
         secret_key: Option<CryptoTyped<CryptoKey>>,
         routing_context: Arc<RoutingContext>,
         crypto_system: CryptoSystemVLD0,
-        iroh_blobs: Option<VeilidIrohBlobs>,
+        iroh_blobs: VeilidIrohBlobs,
     ) -> Self {
         Self {
             dht_record,
@@ -47,8 +50,25 @@ impl Repo {
         self.dht_record.key().value.clone()
     }
 
-    pub fn get_write_key(&self) -> Option<CryptoKey> {
-        unimplemented!("WIP")
+    pub fn can_write(&self) -> bool {
+        self.secret_key.is_some()
+    }
+
+    pub async fn update_route_on_dht(&self) -> Result<()> {
+        let route_id_blob = self.iroh_blobs.route_id_blob();
+
+        // Set the root hash in the DHT record
+        self.routing_context
+            .set_dht_value(
+                self.dht_record.key().clone(),
+                ROUTE_SUBKEY,
+                route_id_blob,
+                None,
+            )
+            .await
+            .map_err(|e| anyhow!("Failed to store route ID blob in DHT: {}", e))?;
+
+        Ok(())
     }
 
     pub fn file_names(&self) -> Result<Vec<String>> {
@@ -57,6 +77,29 @@ impl Repo {
 
     pub async fn has_file(&self, file_name: &str) -> Result<bool> {
         unimplemented!("WIP")
+    }
+
+    pub async fn has_hash(&self, hash: &Hash) -> Result<bool> {
+        if self.can_write() {
+            Ok(self.iroh_blobs.has_hash(hash).await)
+        } else {
+            let route_id = self.get_route_id_blob().await?;
+            self.iroh_blobs.ask_hash(route_id, *hash).await
+        }
+    }
+
+    pub async fn get_route_id_blob(&self) -> Result<Vec<u8>> {
+        if self.can_write() {
+            return Ok(self.iroh_blobs.route_id_blob());
+        }
+
+        let value = self
+            .routing_context
+            .get_dht_value(self.dht_record.key().clone(), ROUTE_SUBKEY, false)
+            .await?
+            .ok_or_else(|| anyhow!("Unable to get DHT value for route id blob"))?;
+
+        Ok(value.data().to_vec())
     }
 
     pub async fn get_file_stream(&self, file_name: &str) -> Result<impl Stream<Item = Vec<u8>>> {
@@ -69,7 +112,54 @@ impl Repo {
     }
 
     pub async fn download_all(&self) -> Result<()> {
+        // Get hash from dht
+        // Download collection
+        // Iterate through hahses in collection
+        // Download
         unimplemented!("WIP")
+    }
+
+    pub async fn update_hash_on_dht(&self, hash: &Hash) -> Result<()> {
+        // Convert hash to hex for DHT storage
+        let root_hash_hex = hash.to_hex();
+        // Set the root hash in the DHT record
+        self.routing_context
+            .set_dht_value(
+                self.dht_record.key().clone(),
+                HASH_SUBKEY,
+                root_hash_hex.clone().into(),
+                None,
+            )
+            .await
+            .map_err(|e| anyhow!("Failed to store collection blob in DHT: {}", e))?;
+
+        Ok(())
+    }
+
+    pub async fn get_hash_from_dht(&self) -> Result<Hash> {
+        let value = self
+            .routing_context
+            .get_dht_value(self.dht_record.key().clone(), HASH_SUBKEY, false)
+            .await?
+            .ok_or_else(|| anyhow!("Unable to get DHT value for repo root hash"))?;
+        let mut hash_raw: [u8; 32] = [0; 32];
+        hash_raw.copy_from_slice(value.data());
+
+        let hash = Hash::from_bytes(hash_raw);
+
+        Ok(hash)
+    }
+
+    pub async fn upload_blob(&self, file_path: PathBuf) -> Result<Hash> {
+        if !self.can_write() {
+            return Err(anyhow!("Cannot upload blob, repo is not writable"));
+        }
+        // Use repo id as key for a collection
+        // Upload the file and get the hash
+        let hash = self.iroh_blobs.upload_from_path(file_path).await?;
+
+        self.update_hash_on_dht(&hash).await?;
+        Ok(hash)
     }
 }
 
@@ -96,9 +186,5 @@ impl DHTEntity for Repo {
 
     fn get_secret_key(&self) -> Option<CryptoKey> {
         self.secret_key.clone().map(|key| key.value)
-    }
-
-    fn get_route_id_blob(&self) -> Vec<u8> {
-        self.iroh_blobs.as_ref().expect("iroh_blobs not initialized").route_id_blob()
     }
 }

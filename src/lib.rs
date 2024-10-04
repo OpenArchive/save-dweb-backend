@@ -5,74 +5,88 @@ pub mod group;
 pub mod repo;
 
 use crate::constants::{
-    FAILED_TO_DESERIALIZE_KEYPAIR, FAILED_TO_LOAD_KEYPAIR, GROUP_NOT_FOUND, KEYPAIR_NOT_FOUND,
-    ROUTE_ID_DHT_KEY, TEST_GROUP_NAME, UNABLE_TO_GET_GROUP_NAME, UNABLE_TO_SET_GROUP_NAME,
-    UNABLE_TO_STORE_KEYPAIR, YES, NO, ASK, DATA, DONE
+    ASK, DATA, DONE, FAILED_TO_DESERIALIZE_KEYPAIR, FAILED_TO_LOAD_KEYPAIR, GROUP_NOT_FOUND,
+    KEYPAIR_NOT_FOUND, NO, ROUTE_ID_DHT_KEY, TEST_GROUP_NAME, UNABLE_TO_GET_GROUP_NAME,
+    UNABLE_TO_SET_GROUP_NAME, UNABLE_TO_STORE_KEYPAIR, YES,
 };
 
 use crate::backend::Backend;
-use crate::common::{CommonKeypair, DHTEntity, DHTRecordInfo};
+use crate::common::{CommonKeypair, DHTEntity};
 
+use iroh_blobs::Hash;
 use veilid_core::{
-    vld0_generate_keypair, TypedKey, CRYPTO_KIND_VLD0, VeilidUpdate, VALID_CRYPTO_KINDS, CryptoKey, CryptoTyped,
+    vld0_generate_keypair, CryptoKey, CryptoTyped, TypedKey, VeilidUpdate, CRYPTO_KIND_VLD0,
+    VALID_CRYPTO_KINDS,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
-use iroh_blobs::Hash;
 
 use serial_test::serial;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::fs;
+    use anyhow::Result;
     use bytes::Bytes;
     use std::path::Path;
+    use tmpdir::TmpDir;
+    use tokio::fs;
     use tokio::sync::mpsc;
     use tokio::time::Duration;
     use tokio_stream::wrappers::ReceiverStream;
     use tokio_stream::StreamExt;
-    use tmpdir::TmpDir;
-    use anyhow::Result;
 
     #[tokio::test]
     #[serial]
     async fn blob_transfer() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
         let port = 8080;
-    
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
-    
+
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
         // Initialize the backend
         let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
-    
+
         // Create a group and a repo
-        let group = backend.create_group().await.expect("Unable to create group");
-        let repo = backend.create_repo().await.expect("Unable to create repo");
-    
-        let iroh_blobs = repo.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
-    
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
+        let repo = backend
+            .create_repo(&group.id())
+            .await
+            .expect("Unable to create repo");
+
+        let iroh_blobs = backend
+            .iroh_blobs
+            .as_ref()
+            .expect("iroh_blobs not initialized");
+
         // Prepare data to upload as a blob
         let data_to_upload = b"Test data for blob".to_vec();
         let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
-        tx.send(Ok(Bytes::from(data_to_upload.clone()))).await.unwrap();
+        tx.send(Ok(Bytes::from(data_to_upload.clone())))
+            .await
+            .unwrap();
         drop(tx); // Close the sender
-    
+
         // upload the data as a blob and get the hash
         let hash = iroh_blobs
             .upload_from_stream(rx)
             .await
             .expect("Failed to upload blob");
-    
+
         // some delay to ensure blob is uploaded
         tokio::time::sleep(Duration::from_millis(100)).await;
-    
+
         // download the blob
         let receiver = iroh_blobs
             .read_file(hash.clone())
             .await
             .expect("Failed to read blob");
-    
+
         // retrieve the data from the receiver
         let mut retrieved_data = Vec::new();
         let mut stream = ReceiverStream::new(receiver);
@@ -82,10 +96,10 @@ mod tests {
                 Err(e) => panic!("Error reading data: {:?}", e),
             }
         }
-    
+
         // Verify that the downloaded data matches the uploaded data
         assert_eq!(retrieved_data, data_to_upload);
-    
+
         backend.stop().await.expect("Unable to stop");
         Ok(())
     }
@@ -114,7 +128,7 @@ mod tests {
             .expect(UNABLE_TO_SET_GROUP_NAME);
         let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
         assert_eq!(name, TEST_GROUP_NAME);
-    
+
         backend.stop().await.expect("Unable to stop");
         Ok(())
     }
@@ -124,15 +138,20 @@ mod tests {
     async fn keypair_storage_and_retrieval() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
         let port = 8080;
-    
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
-    
+
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
         let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
-    
-        let group = backend.create_group().await.expect("Unable to create group");
+
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
         backend.stop().await.expect("Unable to stop");
-    
+
         backend.start().await.expect("Unable to restart");
 
         let mut loaded_group = backend
@@ -146,9 +165,10 @@ mod tests {
             .await
             .expect(FAILED_TO_LOAD_KEYPAIR)
             .expect(KEYPAIR_NOT_FOUND);
-    
-        let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data).expect(FAILED_TO_DESERIALIZE_KEYPAIR);
-    
+
+        let retrieved_keypair: CommonKeypair =
+            serde_cbor::from_slice(&keypair_data).expect(FAILED_TO_DESERIALIZE_KEYPAIR);
+
         // Check that the id matches group.id()
         assert_eq!(retrieved_keypair.id, group.id());
 
@@ -161,50 +181,69 @@ mod tests {
         // Check that the secret and encryption keys match
         assert_eq!(retrieved_keypair.secret_key, group.get_secret_key());
         assert_eq!(retrieved_keypair.encryption_key, group.get_encryption_key());
-    
+
         backend.stop().await.expect("Unable to stop");
         Ok(())
     }
-    
+
     #[tokio::test]
     #[serial]
     async fn repo_creation() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
         let port = 8080;
 
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
 
         let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Step 1: Create a group before creating a repo
-        let mut group = backend.create_group().await.expect("Unable to create group");
+        let mut group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
 
         // Step 2: Create a repo
-        let repo = backend.create_repo().await.expect("Unable to create repo");
+        let repo = backend
+            .create_repo(&group.id())
+            .await
+            .expect("Unable to create repo");
 
         let repo_key = repo.get_id();
         assert!(repo_key != CryptoKey::default(), "Repo ID should be set");
-        
+
         // Step 3: Set and verify the repo name
         let repo_name = "Test Repo";
 
-        repo.set_name(repo_name).await.expect("Unable to set repo name");
-        
+        repo.set_name(repo_name)
+            .await
+            .expect("Unable to set repo name");
+
         let name = repo.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
 
         assert_eq!(name, repo_name);
         // Step 4: Add repo to the group
-        group.add_repo(repo.clone()).await.expect("Unable to add repo to group");
+        group
+            .add_repo(repo.clone())
+            .await
+            .expect("Unable to add repo to group");
 
         // Step 5: List known repos and verify the repo is in the list
         let repos = group.list_repos().await;
         assert!(repos.contains(&repo_key));
 
         // Step 6: Retrieve the repo by key and check its name
-        let loaded_repo = backend.get_repo(TypedKey::new(CRYPTO_KIND_VLD0, repo_key.clone())).await.expect("Repo not found");
+        let loaded_repo = backend
+            .get_repo(TypedKey::new(CRYPTO_KIND_VLD0, repo_key.clone()))
+            .await
+            .expect("Repo not found");
 
-        let retrieved_name = loaded_repo.get_name().await.expect("Unable to get repo name after restart");
+        let retrieved_name = loaded_repo
+            .get_name()
+            .await
+            .expect("Unable to get repo name after restart");
         assert_eq!(retrieved_name, repo_name);
 
         backend.stop().await.expect("Unable to stop");
@@ -217,26 +256,38 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(888), async {
             let path = TmpDir::new("test_dweb_backend").await.unwrap();
             let port = 8080;
-        
-            fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
-        
+
+            fs::create_dir_all(path.as_ref())
+                .await
+                .expect("Failed to create base directory");
+
             let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
             backend.start().await.expect("Unable to start");
-        
+
             // Add delay to ensure backend initialization
             tokio::time::sleep(Duration::from_secs(2)).await;
 
             // Create a group and a repo
-            let group = backend.create_group().await.expect("Unable to create group");
-            let repo = backend.create_repo().await.expect("Unable to create repo");
-            let veilid_api = backend.get_veilid_api().expect("Failed to get VeilidAPI instance");
-        
+            let group = backend
+                .create_group()
+                .await
+                .expect("Unable to create group");
+            let repo = backend
+                .create_repo(&group.id())
+                .await
+                .expect("Unable to create repo");
+            let veilid_api = backend
+                .get_veilid_api()
+                .expect("Failed to get VeilidAPI instance");
+
             // Get the update receiver from the backend
-            let update_rx = backend.subscribe_updates().expect("Failed to subscribe to updates");
-        
+            let update_rx = backend
+                .subscribe_updates()
+                .expect("Failed to subscribe to updates");
+
             // Set up a channel to receive AppMessage updates
             let (message_tx, mut message_rx) = mpsc::channel(1);
-        
+
             // Spawn a task to listen for updates
             tokio::spawn(async move {
                 let mut rx = update_rx.resubscribe();
@@ -247,9 +298,12 @@ mod tests {
                     }
                 }
             });
-        
-            println!("Creating a new custom private route with valid crypto kinds: {:?}", VALID_CRYPTO_KINDS);
-        
+
+            println!(
+                "Creating a new custom private route with valid crypto kinds: {:?}",
+                VALID_CRYPTO_KINDS
+            );
+
             // Create a new private route
             let (route_id, route_id_blob) = veilid_api
                 .new_custom_private_route(
@@ -259,31 +313,32 @@ mod tests {
                 )
                 .await
                 .expect("Failed to create route");
-        
+
             // Store the route_id_blob in DHT
             repo.store_route_id_in_dht(route_id_blob.clone())
                 .await
                 .expect("Failed to store route ID blob in DHT");
-        
+
             // Define the message to send
             let message = b"Test Message to Repo Owner".to_vec();
-        
+
             println!("Sending message to owner...");
-        
+
             // Send the message
             repo.send_message_to_owner(veilid_api, message.clone(), ROUTE_ID_DHT_KEY)
                 .await
                 .expect("Failed to send message to repo owner");
-        
+
             // Receive the message from the background task
             let received_app_message = message_rx.recv().await.expect("Failed to receive message");
-        
+
             // Verify the message
             assert_eq!(received_app_message.message(), message.as_slice());
-        
+
             backend.stop().await.expect("Unable to stop");
             Ok::<(), anyhow::Error>(())
-        }).await??;
+        })
+        .await??;
 
         Ok(())
     }
@@ -294,20 +349,34 @@ mod tests {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
         let port = 8080;
 
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
 
         let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
-        let group = backend.create_group().await.expect("Unable to create group");
-        group.set_name(TEST_GROUP_NAME).await.expect(UNABLE_TO_SET_GROUP_NAME);
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
+        group
+            .set_name(TEST_GROUP_NAME)
+            .await
+            .expect(UNABLE_TO_SET_GROUP_NAME);
 
         backend.stop().await.expect("Unable to stop");
 
         backend.start().await.expect("Unable to restart");
-        let loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND);
+        let loaded_group = backend
+            .get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id()))
+            .await
+            .expect(GROUP_NOT_FOUND);
 
-        let name = loaded_group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
+        let name = loaded_group
+            .get_name()
+            .await
+            .expect(UNABLE_TO_GET_GROUP_NAME);
         assert_eq!(name, TEST_GROUP_NAME);
 
         backend.stop().await.expect("Unable to stop");
@@ -318,38 +387,66 @@ mod tests {
     async fn repo_persistence() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
         let port = 8080;
-    
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
-    
+
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
         let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start backend");
-    
-        let mut group = backend.create_group().await.expect("Failed to create group");
-        let repo = backend.create_repo().await.expect("Failed to create repo");
-    
+
+        let mut group = backend
+            .create_group()
+            .await
+            .expect("Failed to create group");
+        let repo = backend
+            .create_repo(&group.id())
+            .await
+            .expect("Failed to create repo");
+
         let repo_name = "Test Repo";
-        repo.set_name(repo_name).await.expect("Unable to set repo name");
-    
+        repo.set_name(repo_name)
+            .await
+            .expect("Unable to set repo name");
+
         let initial_name = repo.get_name().await.expect("Unable to get repo name");
         assert_eq!(initial_name, repo_name, "Initial repo name doesn't match");
-    
+
         let repo_id = repo.id();
         println!("lib: Repo created with id: {:?}", repo_id);
-    
+
         backend.stop().await.expect("Unable to stop backend");
-    
+
         backend.start().await.expect("Unable to restart backend");
-    
-        println!("Backend restarted, attempting to load group with ID: {:?}", group.id());
-    
-        let loaded_group = backend.get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id())).await.expect(GROUP_NOT_FOUND); 
-        let loaded_repo = backend.get_repo(TypedKey::new(CRYPTO_KIND_VLD0, repo_id)).await.expect("Repo not found after restart");  
-    
-        let retrieved_name = loaded_repo.get_name().await.expect("Unable to get repo name after restart");
-        assert_eq!(retrieved_name, repo_name, "Repo name doesn't persist after restart");
-    
-        backend.stop().await.expect("Unable to stop backend after verification");
-    
+
+        println!(
+            "Backend restarted, attempting to load group with ID: {:?}",
+            group.id()
+        );
+
+        let loaded_group = backend
+            .get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id()))
+            .await
+            .expect(GROUP_NOT_FOUND);
+        let loaded_repo = backend
+            .get_repo(TypedKey::new(CRYPTO_KIND_VLD0, repo_id))
+            .await
+            .expect("Repo not found after restart");
+
+        let retrieved_name = loaded_repo
+            .get_name()
+            .await
+            .expect("Unable to get repo name after restart");
+        assert_eq!(
+            retrieved_name, repo_name,
+            "Repo name doesn't persist after restart"
+        );
+
+        backend
+            .stop()
+            .await
+            .expect("Unable to stop backend after verification");
+
         Ok(())
     }
 
@@ -359,30 +456,37 @@ mod tests {
         let path = TmpDir::new("test_dweb_backend_upload_blob").await.unwrap();
         let port = 8081;
 
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
 
         // Initialize the backend
         let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group
-        let group = backend.create_group().await.expect("Unable to create group");
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
 
         // Prepare a temporary file to upload as a blob
         let tmp_file_path = path.as_ref().join("test_blob_file.txt");
         let file_content = b"Test content for file upload";
-        fs::write(&tmp_file_path, file_content).await.expect("Failed to write to temp file");
+        fs::write(&tmp_file_path, file_content)
+            .await
+            .expect("Failed to write to temp file");
 
-        let protected_store = backend.get_protected_store().unwrap();
+        let repo = backend.create_repo(&group.id()).await?;
 
         // Upload the file as a blob and get the hash
-        let hash = group
-            .upload_blob(tmp_file_path.clone(), &protected_store)
+        let hash = repo
+            .upload_blob(tmp_file_path.clone())
             .await
             .expect("Failed to upload blob");
 
         // Verify that the file was uploaded and the hash was written to the DHT
-        let dht_value = backend    
+        let dht_value = backend
             .get_veilid_api()
             .expect("veilid_api not initialized")
             .routing_context()
@@ -394,14 +498,18 @@ mod tests {
         if let Some(dht_value_data) = dht_value {
             // Use the data() method to extract the byte slice
             let dht_value_bytes = dht_value_data.data();
-            let dht_value_str = String::from_utf8(dht_value_bytes.to_vec()).expect("Failed to convert ValueData to String");
+            let dht_value_str = String::from_utf8(dht_value_bytes.to_vec())
+                .expect("Failed to convert ValueData to String");
             assert_eq!(dht_value_str, hash.to_hex());
         } else {
             panic!("No value found in DHT for the given key");
         }
 
         // Read back the file using the hash
-        let iroh_blobs = group.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
+        let iroh_blobs = group
+            .iroh_blobs
+            .as_ref()
+            .expect("iroh_blobs not initialized");
         let receiver = iroh_blobs
             .read_file(hash.clone())
             .await
@@ -429,30 +537,39 @@ mod tests {
         let path = TmpDir::new("test_dweb_backend_upload_blob").await.unwrap();
         let port = 8081;
 
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
 
         // Initialize the backend
         let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group
-        let group = backend.create_group().await.expect("Unable to create group");
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
 
         // Prepare a temporary file to upload as a blob
         let tmp_file_path = path.as_ref().join("test_blob_file.txt");
         let file_content = b"Test content for file upload";
-        fs::write(&tmp_file_path, file_content).await.expect("Failed to write to temp file");
+        fs::write(&tmp_file_path, file_content)
+            .await
+            .expect("Failed to write to temp file");
 
         let protected_store = backend.get_protected_store().unwrap();
 
+        let repo = backend.create_repo(&group.id()).await?;
+
         // Upload the file as a blob and get the hash
-        let hash = group
-            .upload_blob(tmp_file_path.clone(), &protected_store)
+        let hash = repo
+            .upload_blob(tmp_file_path.clone())
             .await
             .expect("Failed to upload blob");
 
         // Verify that the file was uploaded and the hash was written to the DHT
-        let dht_value = backend    
+        let dht_value = backend
             .get_veilid_api()
             .expect("veilid_api not initialized")
             .routing_context()
@@ -464,35 +581,18 @@ mod tests {
         if let Some(dht_value_data) = dht_value {
             // Use the data() method to extract the byte slice
             let dht_value_bytes = dht_value_data.data();
-            let dht_value_str = String::from_utf8(dht_value_bytes.to_vec()).expect("Failed to convert ValueData to String");
+            let dht_value_str = String::from_utf8(dht_value_bytes.to_vec())
+                .expect("Failed to convert ValueData to String");
             assert_eq!(dht_value_str, hash.to_hex());
         } else {
             panic!("No value found in DHT for the given key");
         }
 
-        // Now verify that the hash was properly stored in the ProtectedStore
-        let protected_store = backend.get_veilid_api()
-            .expect("veilid_api not initialized")
-            .protected_store()
-            .expect("Failed to get protected store");
-
-            let stored_dht_info = DHTRecordInfo::load(&protected_store, &group.id())
-            .await
-            .expect("Failed to load DHT info from protected store");
-        
-        println!("DHT Record Info found: {:?}", stored_dht_info);
-        
-        // Check if CID exists
-        assert!(stored_dht_info.cid.is_some(), "DHT info not found in the protected store");
-    
-        // Validate that the group ID and DHT record key were correctly stored
-        assert_eq!(stored_dht_info.id, group.id());
-        assert_eq!(stored_dht_info.dht_key, group.dht_record.key().value);
-        
-        // Validate the CID (collection hash)
-        assert_eq!(stored_dht_info.cid, Some(hash.to_hex()));
         // Read back the file using the hash
-        let iroh_blobs = group.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
+        let iroh_blobs = group
+            .iroh_blobs
+            .as_ref()
+            .expect("iroh_blobs not initialized");
         let receiver = iroh_blobs
             .read_file(hash.clone())
             .await
