@@ -1,6 +1,7 @@
 use crate::common::DHTEntity;
 use crate::repo::Repo;
 use anyhow::{anyhow, Error, Result};
+use bytes::Bytes;
 use hex::ToHex;
 use iroh_blobs::Hash;
 use rand::seq::SliceRandom;
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use url::Url;
 use veilid_core::{
     CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, ProtectedStore, RoutingContext,
@@ -124,6 +126,35 @@ impl Group {
         }
 
         return Ok(false);
+    }
+
+    pub async fn has_hash(&self, hash: &Hash) -> Result<bool> {
+        let iroh_blobs = match self.iroh_blobs.as_ref() {
+            Some(iroh_blobs) => iroh_blobs,
+            None => return Err(anyhow!("Iroh not initialized")),
+        };
+
+        let has = iroh_blobs.has_hash(hash).await;
+
+        Ok(has)
+    }
+
+    pub async fn get_stream_from_hash(
+        &self,
+        hash: &Hash,
+    ) -> Result<mpsc::Receiver<std::io::Result<Bytes>>> {
+        let iroh_blobs = match self.iroh_blobs.as_ref() {
+            Some(iroh_blobs) => iroh_blobs,
+            None => return Err(anyhow!("Iroh not initialized")),
+        };
+
+        if self.has_hash(hash).await? {
+            self.download_hash_from_peers(hash).await?
+        }
+
+        let receiver = iroh_blobs.read_file(*hash).await.unwrap();
+
+        Ok(receiver)
     }
 
     pub async fn get_repo_name(&self, repo_key: CryptoKey) -> Result<String> {
