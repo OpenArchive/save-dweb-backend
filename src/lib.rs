@@ -227,11 +227,10 @@ mod tests {
         // Step 4: Add repo to the group
         group
             .add_repo(repo.clone())
-            .await
             .expect("Unable to add repo to group");
 
         // Step 5: List known repos and verify the repo is in the list
-        let repos = group.list_repos().await;
+        let repos = group.list_repos();
         assert!(repos.contains(&repo_key));
 
         // Step 6: Retrieve the repo by key and check its name

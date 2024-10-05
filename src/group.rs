@@ -3,6 +3,8 @@ use crate::repo::Repo;
 use anyhow::{anyhow, Error, Result};
 use hex::ToHex;
 use iroh_blobs::Hash;
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::PathBuf;
@@ -60,13 +62,68 @@ impl Group {
         self.dht_record.owner_secret().cloned()
     }
 
-    pub async fn add_repo(&mut self, repo: Repo) -> Result<()> {
+    pub fn add_repo(&mut self, repo: Repo) -> Result<()> {
         self.repos.push(repo);
         Ok(())
     }
 
-    pub async fn list_repos(&self) -> Vec<CryptoKey> {
+    pub fn list_repos(&self) -> Vec<CryptoKey> {
         self.repos.iter().map(|repo| repo.get_id()).collect()
+    }
+
+    pub fn get_own_repo(&self) -> Option<&Repo> {
+        for repo in self.repos.iter() {
+            if repo.can_write() {
+                return Some(&repo);
+            }
+        }
+        None
+    }
+
+    pub fn list_peer_repos(&self) -> Vec<&Repo> {
+        self.repos.iter().filter(|repo| !repo.can_write()).collect()
+    }
+
+    pub async fn download_hash_from_peers(&self, hash: &Hash) -> Result<()> {
+        let iroh_blobs = match self.iroh_blobs.as_ref() {
+            Some(iroh_blobs) => iroh_blobs,
+            None => return Err(anyhow!("Iroh not initialized")),
+        };
+
+        // Ask peers to download in random order
+        let mut rng = thread_rng();
+        let mut repos = self.list_peer_repos();
+        repos.shuffle(&mut rng);
+
+        for repo in repos.iter() {
+            if let Ok(route_id_blob) = repo.get_route_id_blob().await {
+                // It's faster to try and fail, than to ask then try
+                if let Ok(_) = iroh_blobs.download_file_from(route_id_blob, hash).await {
+                    return Ok(());
+                }
+            }
+        }
+
+        Err(anyhow!("Unable to download from any peer"))
+    }
+
+    pub async fn peers_have_hash(&self, hash: &Hash) -> Result<bool> {
+        let iroh_blobs = match self.iroh_blobs.as_ref() {
+            Some(iroh_blobs) => iroh_blobs,
+            None => return Err(anyhow!("Iroh not initialized")),
+        };
+
+        for repo in self.list_peer_repos().iter() {
+            if let Ok(route_id_blob) = repo.get_route_id_blob().await {
+                if let Ok(has) = iroh_blobs.ask_hash(route_id_blob, *hash).await {
+                    if has {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+
+        return Ok(false);
     }
 
     pub async fn get_repo_name(&self, repo_key: CryptoKey) -> Result<String> {
