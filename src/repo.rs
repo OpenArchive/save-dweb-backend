@@ -196,7 +196,7 @@ impl Repo {
     }
 
     // Method to delete a file from the collection
-    pub async fn delete_file_from_repo_collection(&self, file_name: &str) -> Result<Hash> {
+    pub async fn delete_file(&self, file_name: &str) -> Result<Hash> {
         self.check_write_permissions()?;
         let collection_name = self.get_name().await?;
 
