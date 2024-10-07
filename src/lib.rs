@@ -946,4 +946,77 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    #[serial]
+    async fn test_repo_collection_management() -> Result<()> {
+        // Setup a temporary directory and initialize the backend
+        let path = TmpDir::new("test_repo_collection_management").await.unwrap();
+        let port = 8080;
+        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+
+        // Initialize the backend
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        // Step 1: Create a group
+        let mut group = backend.create_group().await.expect("Failed to create group");
+
+        // Step 2: Create a repo and verify it can write (i.e., has a secret key)
+        let mut repo = backend
+            .create_repo(&group.id())
+            .await
+            .expect("Failed to create repo");
+
+        assert!(repo.can_write(), "Repo should have write access");
+
+        // Step 3: Set the repo name
+        let repo_name = "Test Repo";
+
+        repo.set_name(repo_name)
+            .await
+            .expect("Unable to set repo name");
+
+        // Step 4: Add the repo to the group
+        group.add_repo(repo.clone()).expect("Failed to add repo to group");
+
+        // Step 5: Create or get the collection associated with the repo
+        let collection_hash = repo.get_or_create_collection().await?;
+        assert!(!collection_hash.as_bytes().is_empty(), "Collection hash should not be empty");
+
+        // Step 6: Prepare a file to upload
+        let file_name = "example.txt";
+        let file_content = b"Test content for file upload";
+        let file_path = path.as_ref().join(file_name);
+        fs::write(&file_path, file_content).await.expect("Failed to write to file");
+
+        // Step 7: Upload the file to the collection
+        let file_hash = repo.upload_blob(file_path.clone()).await?;
+        assert!(!file_hash.as_bytes().is_empty(), "File hash should not be empty after upload");
+
+        // Step 8: Add the file to the collection
+        let updated_collection_hash = repo.set_file_in_repo_collection(file_name, file_hash).await?;
+        assert!(!updated_collection_hash.as_bytes().is_empty(), "Updated collection hash should not be empty after adding file");
+
+        // Step 9: Verify the file is listed in the collection
+        let file_list = repo.list_files_in_repo_collection().await?;
+        assert_eq!(file_list.len(), 1, "There should be one file in the collection");
+        assert_eq!(file_list[0], file_name, "The listed file should match the uploaded file");
+
+        // Step 10: Retrieve the file hash from the collection and verify it matches the uploaded hash
+        let retrieved_file_hash = repo.get_file_from_repo_collection(file_name).await?;
+        assert_eq!(file_hash, retrieved_file_hash, "The retrieved file hash should match the uploaded file hash");
+
+        // Step 11: Delete the file from the collection
+        let collection_hash_after_deletion = repo.delete_file_from_repo_collection(file_name).await?;
+        assert!(!collection_hash_after_deletion.as_bytes().is_empty(), "Collection hash should not be empty after file deletion");
+
+        // Step 12: Verify the file is no longer listed in the collection
+        let file_list_after_deletion = repo.list_files_in_repo_collection().await?;
+        assert!(file_list_after_deletion.is_empty(), "The file list should be empty after deleting the file");
+
+        // Final Step: finished! -> Clean up 
+        backend.stop().await.expect("Unable to stop backend");
+        Ok(())
+    }
+
 }
