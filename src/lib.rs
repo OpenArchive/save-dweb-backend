@@ -986,11 +986,9 @@ mod tests {
         // Step 6: Prepare a file to upload
         let file_name = "example.txt";
         let file_content = b"Test content for file upload";
-        let file_path = path.as_ref().join(file_name);
-        fs::write(&file_path, file_content).await.expect("Failed to write to file");
-
+       
         // Step 7: Upload the file to the collection
-        let file_hash = repo.upload_blob(file_path.clone()).await?;
+        let file_hash = repo.upload(file_name, file_content.to_vec()).await?;
         assert!(!file_hash.as_bytes().is_empty(), "File hash should not be empty after upload");
 
         // Step 8: Add the file to the collection
