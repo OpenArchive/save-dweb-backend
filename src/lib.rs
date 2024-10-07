@@ -679,4 +679,38 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    #[serial]
+    async fn get_own_repo_test() -> Result<()> {
+        let path = TmpDir::new("test_dweb_backend_get_own_repo").await.unwrap();
+        let port = 8080;
+
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        // Create a group and two repos, one writable
+        let mut group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
+        let writable_repo = backend.create_repo(&group.id()).await?;
+        let read_only_repo = backend.create_repo(&group.id()).await?;
+
+        // Add repos to the group
+        group.add_repo(writable_repo.clone()).expect("Unable to add writable repo");
+        group.add_repo(read_only_repo.clone()).expect("Unable to add read-only repo");
+
+        // Verify own repo is found
+        let own_repo = group.get_own_repo();
+        assert!(own_repo.is_some());
+        assert_eq!(own_repo.unwrap().get_id(), writable_repo.get_id());
+
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
+
 }
