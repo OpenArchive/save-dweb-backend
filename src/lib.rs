@@ -998,20 +998,20 @@ mod tests {
         assert!(!updated_collection_hash.as_bytes().is_empty(), "Updated collection hash should not be empty after adding file");
 
         // Step 9: Verify the file is listed in the collection
-        let file_list = repo.list_files_in_repo_collection().await?;
+        let file_list = repo.list_files().await?;
         assert_eq!(file_list.len(), 1, "There should be one file in the collection");
         assert_eq!(file_list[0], file_name, "The listed file should match the uploaded file");
 
         // Step 10: Retrieve the file hash from the collection and verify it matches the uploaded hash
-        let retrieved_file_hash = repo.get_file_from_repo_collection(file_name).await?;
+        let retrieved_file_hash = repo.get_file_hash(file_name).await?;
         assert_eq!(file_hash, retrieved_file_hash, "The retrieved file hash should match the uploaded file hash");
 
         // Step 11: Delete the file from the collection
-        let collection_hash_after_deletion = repo.delete_file_from_repo_collection(file_name).await?;
+        let collection_hash_after_deletion = repo.delete_file(file_name).await?;
         assert!(!collection_hash_after_deletion.as_bytes().is_empty(), "Collection hash should not be empty after file deletion");
 
         // Step 12: Verify the file is no longer listed in the collection
-        let file_list_after_deletion = repo.list_files_in_repo_collection().await?;
+        let file_list_after_deletion = repo.list_files().await?;
         assert!(file_list_after_deletion.is_empty(), "The file list should be empty after deleting the file");
 
         // Final Step: finished! -> Clean up 
