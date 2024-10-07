@@ -758,4 +758,52 @@ mod tests {
         backend.stop().await.expect("Unable to stop backend");
         Ok(())
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_delete_file_from_collection_via_backend() -> Result<()> {
+        // Setup temporary directory for backend and veilid blobs
+        let path = TmpDir::new("test_backend_delete_file").await.unwrap();
+        let port = 8080;
+        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+
+        // Initialize the backend
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        // Step 1: Create a group via backend
+        let group = backend.create_group().await.expect("Unable to create group");
+
+        // Step 2: Create a collection via the backend's veilid_iroh_blobs instance
+        let collection_name = "test_delete_collection".to_string();
+        let iroh_blobs = backend.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
+        let collection_hash = iroh_blobs.create_collection(&collection_name).await.expect("Failed to create collection");
+        
+        assert!(!collection_hash.as_bytes().is_empty(), "Collection hash should not be empty");
+
+        // Step 3: Upload a file to the collection
+        let file_path = path.as_ref().join("test_file_to_delete.txt");
+        let file_content = b"File content to be deleted";
+        fs::write(&file_path, file_content).await.expect("Failed to write to file");
+
+        let file_hash = iroh_blobs.upload_from_path(file_path.clone()).await.expect("Failed to upload file");
+        assert!(!file_hash.as_bytes().is_empty(), "File hash should not be empty");
+
+        // Step 4: Add the file to the collection
+        let updated_collection_hash = iroh_blobs.set_file(&collection_name, "test_file_to_delete.txt", &file_hash).await.expect("Failed to set file in collection");
+        assert!(!updated_collection_hash.as_bytes().is_empty(), "Updated collection hash should not be empty");
+
+        // Step 5: Delete the file from the collection
+        let new_collection_hash = iroh_blobs.delete_file(&collection_name, "test_file_to_delete.txt").await.expect("Failed to delete file from collection");
+        assert!(!new_collection_hash.as_bytes().is_empty(), "New collection hash after deletion should not be empty");
+
+        // Step 6: Verify that the file was deleted
+        let file_list_after_deletion = iroh_blobs.list_files(&collection_name).await.expect("Failed to list files in collection");
+        assert!(file_list_after_deletion.is_empty(), "The collection should be empty after deleting the file");
+
+        // Clean up
+        backend.stop().await.expect("Unable to stop backend");
+        Ok(())
+    }
+
 }
