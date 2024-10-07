@@ -150,6 +150,12 @@ impl Repo {
         Ok(hash)
     }
 
+    pub async fn update_collection_on_dht(&self) -> Result<()> {
+        let collection_hash = self.get_collection_hash().await?;
+        self.update_hash_on_dht(&collection_hash).await
+    }
+    
+
     pub async fn upload_blob(&self, file_path: PathBuf) -> Result<Hash> {
         if !self.can_write() {
             return Err(anyhow!("Cannot upload blob, repo is not writable"));
