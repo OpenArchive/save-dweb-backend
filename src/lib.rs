@@ -34,6 +34,7 @@ mod tests {
     use tokio::time::Duration;
     use tokio_stream::wrappers::ReceiverStream;
     use tokio_stream::StreamExt;
+    use tokio::time::sleep;
 
     #[tokio::test]
     #[serial]
@@ -713,6 +714,141 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    #[serial]
+    async fn download_hash_from_peers_test() -> Result<()> {
+        let path = TmpDir::new("test_dweb_backend_download_hash").await.unwrap();
+        let port = 8080;
+
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        // Create a group and a peer repo
+        let mut group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
+        let mut peer_repo = backend.create_repo(&group.id()).await?;
+
+        // Add the peer repo to the group
+        group.add_repo(peer_repo.clone()).expect("Unable to add peer repo");
+
+        // Upload a test blob to the peer repo
+        let data_to_upload = Bytes::from("Test data for peer download");
+        let collection_name = "peer_repo_collection".to_string();
+        peer_repo.iroh_blobs.create_collection(&collection_name).await.expect("Unable to create collection");
+
+        // Create a file stream using mpsc
+        let (tx, rx) = mpsc::channel(1);
+        tx.send(Ok(data_to_upload.clone())).await.unwrap();
+        drop(tx); // Close the sender
+
+        // Upload using the new method `upload_to`
+        let file_path = "test_file.txt".to_string();
+        let file_hash = peer_repo
+            .iroh_blobs
+            .upload_to(&collection_name, &file_path, rx)
+            .await
+            .expect("Failed to upload to collection");
+
+        // Add the uploaded file to the collection
+        let new_file_collection_hash = peer_repo
+            .iroh_blobs
+            .set_file(&collection_name, &file_path, &file_hash)
+            .await
+            .expect("Unable to add file to collection");
+        assert!(!new_file_collection_hash.as_bytes().is_empty(), "New collection hash after uploading a file should not be empty");
+
+        // Add delay to allow peers to propagate the hash
+        sleep(Duration::from_secs(3)).await;
+
+        // Download hash from peers
+        if let Err(e) = group.download_hash_from_peers(&file_hash).await {
+            eprintln!("Unable to download hash from peers: {:?}", e);
+            backend.stop().await.expect("Unable to stop");
+            return Err(e);
+        }
+
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn peers_have_hash_test() -> Result<()> {
+        let path = TmpDir::new("test_dweb_backend_peers_have_hash").await.unwrap();
+        let port = 8080;
+
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        // Create a group and a peer repo
+        let mut group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
+        let mut peer_repo = backend.create_repo(&group.id()).await?;
+
+        // Add the peer repo to the group
+        group.add_repo(peer_repo.clone()).expect("Unable to add peer repo");
+
+        // Upload a test blob to the peer repo
+        let data_to_upload = Bytes::from("Test data for peer check");
+        let collection_name = "peer_repo_collection_check".to_string();
+        peer_repo.iroh_blobs.create_collection(&collection_name).await.expect("Unable to create collection");
+
+        // Create a file stream using mpsc
+        let (tx, rx) = mpsc::channel(1);
+        tx.send(Ok(data_to_upload.clone())).await.unwrap();
+        drop(tx); // Close the sender
+
+        let iroh_blobs = backend
+            .iroh_blobs
+            .as_ref()
+            .expect("iroh_blobs not initialized");
+
+        // Upload using the new method `upload_to`
+        let file_path = "test_file_check.txt".to_string();
+        let file_hash = iroh_blobs
+            .upload_to(&collection_name, &file_path, rx)
+            .await
+            .expect("Failed to upload to collection");
+
+        // Add the uploaded file to the collection
+        let new_file_collection_hash = iroh_blobs
+            .set_file(&collection_name, &file_path, &file_hash)
+            .await
+            .expect("Unable to add file to collection");
+        assert!(!new_file_collection_hash.as_bytes().is_empty(), "New collection hash after uploading a file should not be empty");
+
+        // Add delay to allow peers to propagate the hash
+        sleep(Duration::from_secs(5)).await;
+
+        // Retry checking if peers have the hash
+        let mut retries = 10;
+        let mut peers_have = false;
+        while retries > 0 {
+            peers_have = group.peers_have_hash(&file_hash).await.unwrap_or(false);
+            if peers_have {
+                break;
+            }
+            retries -= 1;
+            sleep(Duration::from_secs(2)).await;
+        }
+
+        assert!(peers_have, "Peers should have the uploaded hash");
+
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
 
     #[tokio::test]
     #[serial]
