@@ -189,7 +189,7 @@ impl Repo {
     }
 
     // Method to list all files in the collection
-    pub async fn list_files_in_repo_collection(&self) -> Result<Vec<String>> {
+    async fn list_files_in_repo_collection(&self) -> Result<Vec<String>> {
         let collection_name = self.get_name().await?;
 
         self.iroh_blobs.list_files(&collection_name).await
