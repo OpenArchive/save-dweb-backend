@@ -8,10 +8,4 @@ pub const KEYPAIR_NOT_FOUND: &str = "Keypair not found";
 pub const FAILED_TO_DESERIALIZE_KEYPAIR: &str = "Failed to deserialize keypair";
 pub const ROUTE_ID_DHT_KEY: u32 = 2;
 
-pub const NO: u8 = 0x00u8;
-pub const YES: u8 = 0x01u8;
-pub const HAS: u8 = 0x10u8;
-pub const ASK: u8 = 0x11u8;
-pub const DATA: u8 = 0x20u8;
-pub const DONE: u8 = 0x22u8;
-pub const ERR: u8 = 0xF0u8;
+pub const KNOWN_GROUP_LIST: &str = "SAVE_BACKEND_KNOWN_GROUPS";

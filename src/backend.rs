@@ -1,4 +1,5 @@
 use crate::common::{make_route, CommonKeypair, DHTEntity};
+use crate::constants::KNOWN_GROUP_LIST;
 use crate::group::{Group, URL_DHT_KEY, URL_ENCRYPTION_KEY, URL_PUBLIC_KEY, URL_SECRET_KEY};
 use crate::repo::Repo;
 use anyhow::{anyhow, Result};
@@ -7,6 +8,7 @@ use iroh::node::Node;
 use iroh_blobs::format::collection::Collection;
 use iroh_blobs::util::SetTagOption;
 use iroh_blobs::Hash;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::mem;
 use std::path::{Path, PathBuf};
@@ -28,6 +30,11 @@ use veilid_core::{
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 use xdg::BaseDirectories;
+
+#[derive(Serialize, Deserialize)]
+pub struct KnownGroupList {
+    groups: Vec<CryptoKey>,
+}
 
 pub struct BackendInner {
     path: PathBuf,
@@ -158,7 +165,7 @@ impl Backend {
         Ok(())
     }
 
-    pub async fn stop(&mut self) -> Result<()> {
+    pub async fn stop(&self) -> Result<()> {
         let mut inner = self.inner.lock().await;
         println!("Stopping Backend...");
         if let Some(iroh_blobs) = inner.iroh_blobs.take() {
@@ -217,6 +224,8 @@ impl Backend {
         };
         inner.groups.insert(group.id(), Box::new(group.clone()));
 
+        self.save_known_group_ids().await?;
+
         Ok(Box::new(group))
     }
 
@@ -265,6 +274,8 @@ impl Backend {
         .map_err(|e| anyhow!(e))?;
 
         inner.groups.insert(group.id(), Box::new(group.clone()));
+
+        self.save_known_group_ids().await?;
 
         Ok(group)
     }
@@ -327,6 +338,42 @@ impl Backend {
     pub async fn list_groups(&self) -> Result<Vec<Box<Group>>> {
         let mut inner = self.inner.lock().await;
         Ok(inner.groups.values().cloned().collect())
+    }
+
+    pub async fn load_known_groups(self) -> Result<()> {
+        for id in self.list_known_group_ids().await?.iter() {
+            self.get_group(TypedKey::new(CRYPTO_KIND_VLD0, *id)).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn list_known_group_ids(&self) -> Result<Vec<CryptoKey>> {
+        let data = self
+            .get_protected_store()
+            .await?
+            .load_user_secret(KNOWN_GROUP_LIST)
+            .await
+            .map_err(|_| anyhow!("Failed to load keypair"))?
+            .ok_or_else(|| anyhow!("Keypair not found"))?;
+        let info: KnownGroupList =
+            serde_cbor::from_slice(&data).map_err(|_| anyhow!("Failed to deserialize keypair"))?;
+        Ok(info.groups)
+    }
+
+    async fn save_known_group_ids(&self) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        let groups = inner.groups.clone().into_keys().collect();
+
+        let info = KnownGroupList { groups };
+
+        let data =
+            serde_cbor::to_vec(&info).map_err(|e| anyhow!("Failed to serialize keypair: {}", e))?;
+        self.get_protected_store()
+            .await?
+            .save_user_secret(KNOWN_GROUP_LIST, &data)
+            .await
+            .map_err(|e| anyhow!("Unable to store keypair: {}", e))?;
+        Ok(())
     }
 
     pub async fn close_group(&self, key: CryptoKey) -> Result<()> {
