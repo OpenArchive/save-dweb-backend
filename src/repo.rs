@@ -209,7 +209,12 @@ impl Repo {
         self.check_write_permissions()?;
         let collection_name = self.get_name().await?;
 
-        self.iroh_blobs.delete_file(&collection_name, file_name).await
+        let deleted_hash = self.iroh_blobs.delete_file(&collection_name, file_name).await?;
+
+        // Update the DHT with the new collection hash
+        self.update_collection_on_dht().await?;
+    
+        Ok(deleted_hash)
     }
 
     // Method to get the collection's hash
