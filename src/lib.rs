@@ -644,4 +644,39 @@ mod tests {
         assert_eq!(keys.id, group.id());
         backend.stop().await.expect("Unable to stop");
     }
+    #[tokio::test]
+    #[serial]
+    async fn list_repos_test() -> Result<()> {
+        let path = TmpDir::new("test_dweb_backend_list_repos").await.unwrap();
+        let port = 8080;
+
+        fs::create_dir_all(path.as_ref())
+            .await
+
+            .expect("Failed to create base directory");
+
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        // Create a group and two repos
+        let mut group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
+        let repo1 = backend.create_repo(&group.id()).await?;
+        let repo2 = backend.create_repo(&group.id()).await?;
+
+        // Add repos to the group
+        group.add_repo(repo1.clone()).expect("Unable to add repo1");
+        group.add_repo(repo2.clone()).expect("Unable to add repo2");
+
+        // List repos and verify
+        let repos = group.list_repos();
+        assert!(repos.contains(&repo1.get_id()));
+        assert!(repos.contains(&repo2.get_id()));
+
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
+
 }
