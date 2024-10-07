@@ -187,7 +187,10 @@ impl Repo {
 
         self.iroh_blobs.get_file(&collection_name, file_name).await
     }
-
+    pub async fn list_files(&self) -> Result<Vec<String>> {
+        self.check_write_permissions()?;
+        self.list_files_in_repo_collection().await
+    }
     // Method to list all files in the collection
     async fn list_files_in_repo_collection(&self) -> Result<Vec<String>> {
         let collection_name = self.get_name().await?;
