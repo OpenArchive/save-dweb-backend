@@ -5,9 +5,9 @@ pub mod group;
 pub mod repo;
 
 use crate::constants::{
-    ASK, DATA, DONE, FAILED_TO_DESERIALIZE_KEYPAIR, FAILED_TO_LOAD_KEYPAIR, GROUP_NOT_FOUND,
-    KEYPAIR_NOT_FOUND, NO, ROUTE_ID_DHT_KEY, TEST_GROUP_NAME, UNABLE_TO_GET_GROUP_NAME,
-    UNABLE_TO_SET_GROUP_NAME, UNABLE_TO_STORE_KEYPAIR, YES,
+    FAILED_TO_DESERIALIZE_KEYPAIR, FAILED_TO_LOAD_KEYPAIR, GROUP_NOT_FOUND, KEYPAIR_NOT_FOUND,
+    ROUTE_ID_DHT_KEY, TEST_GROUP_NAME, UNABLE_TO_GET_GROUP_NAME, UNABLE_TO_SET_GROUP_NAME,
+    UNABLE_TO_STORE_KEYPAIR,
 };
 
 use crate::backend::Backend;
@@ -441,6 +441,10 @@ mod tests {
             retrieved_name, repo_name,
             "Repo name doesn't persist after restart"
         );
+
+        let known = backend.list_known_group_ids().await?;
+
+        assert_eq!(known.len(), 1, "One group got saved");
 
         backend
             .stop()
