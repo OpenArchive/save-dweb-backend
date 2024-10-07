@@ -74,12 +74,7 @@ impl Group {
     }
 
     pub fn get_own_repo(&self) -> Option<&Repo> {
-        for repo in self.repos.iter() {
-            if repo.can_write() {
-                return Some(&repo);
-            }
-        }
-        None
+        self.repos.iter().find(|repo| repo.can_write())
     }
 
     pub fn list_peer_repos(&self) -> Vec<&Repo> {
@@ -100,7 +95,7 @@ impl Group {
         for repo in repos.iter() {
             if let Ok(route_id_blob) = repo.get_route_id_blob().await {
                 // It's faster to try and fail, than to ask then try
-                if let Ok(_) = iroh_blobs.download_file_from(route_id_blob, hash).await {
+                if (iroh_blobs.download_file_from(route_id_blob, hash).await).is_ok() {
                     return Ok(());
                 }
             }
@@ -125,7 +120,7 @@ impl Group {
             }
         }
 
-        return Ok(false);
+        Ok(false)
     }
 
     pub async fn has_hash(&self, hash: &Hash) -> Result<bool> {
