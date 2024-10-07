@@ -28,7 +28,7 @@ pub const URL_SECRET_KEY: &str = "sk";
 pub struct Group {
     pub dht_record: DHTRecordDescriptor,
     pub encryption_key: SharedSecret,
-    pub routing_context: Arc<RoutingContext>,
+    pub routing_context: RoutingContext,
     pub crypto_system: CryptoSystemVLD0,
     pub repos: Vec<Repo>,
     pub iroh_blobs: Option<VeilidIrohBlobs>,
@@ -38,7 +38,7 @@ impl Group {
     pub fn new(
         dht_record: DHTRecordDescriptor,
         encryption_key: SharedSecret,
-        routing_context: Arc<RoutingContext>,
+        routing_context: RoutingContext,
         crypto_system: CryptoSystemVLD0,
         iroh_blobs: Option<VeilidIrohBlobs>,
     ) -> Self {
@@ -111,6 +111,7 @@ impl Group {
         };
 
         for repo in self.list_peer_repos().iter() {
+            println!("Askinng {} from {}", hash, repo.id());
             if let Ok(route_id_blob) = repo.get_route_id_blob().await {
                 if let Ok(has) = iroh_blobs.ask_hash(route_id_blob, *hash).await {
                     if has {
@@ -191,7 +192,7 @@ impl DHTEntity for Group {
         self.encryption_key.clone()
     }
 
-    fn get_routing_context(&self) -> Arc<RoutingContext> {
+    fn get_routing_context(&self) -> RoutingContext {
         self.routing_context.clone()
     }
 

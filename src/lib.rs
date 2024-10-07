@@ -47,7 +47,7 @@ mod tests {
             .expect("Failed to create base directory");
 
         // Initialize the backend
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group and a repo
@@ -115,7 +115,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         let group = backend
@@ -144,7 +144,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         let group = backend
@@ -197,7 +197,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Step 1: Create a group before creating a repo
@@ -261,7 +261,7 @@ mod tests {
                 .await
                 .expect("Failed to create base directory");
 
-            let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+            let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
             backend.start().await.expect("Unable to start");
 
             // Add delay to ensure backend initialization
@@ -355,7 +355,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         let group = backend
@@ -394,7 +394,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start backend");
 
         let mut group = backend
@@ -467,7 +467,7 @@ mod tests {
             .expect("Failed to create base directory");
 
         // Initialize the backend
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group
@@ -549,7 +549,7 @@ mod tests {
             .expect("Failed to create base directory");
 
         // Initialize the backend
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group
@@ -633,7 +633,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
 
         backend.start().await.expect("Unable to start");
         let group = backend
@@ -663,7 +663,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group and two repos
@@ -697,7 +697,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group and two repos, one writable
@@ -737,7 +737,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group and a peer repo
@@ -811,7 +811,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group and a peer repo
@@ -819,6 +819,7 @@ mod tests {
             .create_group()
             .await
             .expect("Unable to create group");
+
         let mut peer_repo = backend.create_repo(&group.id()).await?;
 
         // Add the peer repo to the group
@@ -861,12 +862,12 @@ mod tests {
             !new_file_collection_hash.as_bytes().is_empty(),
             "New collection hash after uploading a file should not be empty"
         );
-
+        println!("Asking peers");
         // Add delay to allow peers to propagate the hash
         sleep(Duration::from_secs(5)).await;
 
         // Retry checking if peers have the hash
-        let mut retries = 10;
+        let mut retries = 2;
         let mut peers_have = false;
         while retries > 0 {
             peers_have = group.peers_have_hash(&file_hash).await.unwrap_or(false);
@@ -894,7 +895,7 @@ mod tests {
             .expect("Failed to create base directory");
 
         // Initialize the backend
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Step 1: Create a group via backend
@@ -975,7 +976,7 @@ mod tests {
             .expect("Failed to create base directory");
 
         // Initialize the backend
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Step 1: Create a group via backend

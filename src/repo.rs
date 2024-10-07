@@ -22,7 +22,7 @@ pub struct Repo {
     pub dht_record: DHTRecordDescriptor,
     pub encryption_key: SharedSecret,
     pub secret_key: Option<CryptoTyped<CryptoKey>>,
-    pub routing_context: Arc<RoutingContext>,
+    pub routing_context: RoutingContext,
     pub crypto_system: CryptoSystemVLD0,
     pub iroh_blobs: VeilidIrohBlobs,
 }
@@ -32,7 +32,7 @@ impl Repo {
         dht_record: DHTRecordDescriptor,
         encryption_key: SharedSecret,
         secret_key: Option<CryptoTyped<CryptoKey>>,
-        routing_context: Arc<RoutingContext>,
+        routing_context: RoutingContext,
         crypto_system: CryptoSystemVLD0,
         iroh_blobs: VeilidIrohBlobs,
     ) -> Self {
@@ -172,7 +172,7 @@ impl DHTEntity for Repo {
         self.encryption_key.clone()
     }
 
-    fn get_routing_context(&self) -> Arc<RoutingContext> {
+    fn get_routing_context(&self) -> RoutingContext {
         self.routing_context.clone()
     }
 
