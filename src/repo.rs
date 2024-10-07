@@ -233,7 +233,12 @@ impl Repo {
         tx.send(Ok(Bytes::from(data_to_upload.clone()))).await.unwrap();
         drop(tx);
 
-        self.iroh_blobs.upload_to(&collection_name, file_name, rx).await
+        let file_hash = self.iroh_blobs.upload_to(&collection_name, file_name, rx).await?;
+
+        // Update the collection hash on the DHT
+        self.update_collection_on_dht().await?;
+
+        Ok(file_hash) 
     }
 
     // Helper method to check if the repo can write
