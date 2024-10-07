@@ -218,7 +218,7 @@ impl Repo {
     }
 
     // Method to get the collection's hash
-    pub async fn get_collection_hash(&self) -> Result<Hash> {
+   async fn get_collection_hash(&self) -> Result<Hash> {
         let collection_name = self.get_name().await?;
 
         self.iroh_blobs.collection_hash(&collection_name).await
