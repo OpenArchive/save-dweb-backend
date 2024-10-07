@@ -61,14 +61,16 @@ impl BackendInner {
     }
 
     fn veilid(&self) -> Result<VeilidAPI> {
-        Ok(self.veilid_api
+        Ok(self
+            .veilid_api
             .as_ref()
             .ok_or_else(|| anyhow!("Veilid API not initialized"))?
             .clone())
     }
 
     fn iroh_blobs(&self) -> Result<VeilidIrohBlobs> {
-        Ok(self.iroh_blobs
+        Ok(self
+            .iroh_blobs
             .as_ref()
             .ok_or_else(|| anyhow!("Veilid Iroh Blobs API not initialized"))?
             .clone())
