@@ -12,6 +12,7 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
+use tokio::sync::Mutex;
 use tokio::sync::{
     broadcast,
     mpsc::{self, Receiver},
@@ -28,9 +29,8 @@ use veilid_core::{
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 use xdg::BaseDirectories;
 
-pub struct Backend {
+pub struct BackendInner {
     path: PathBuf,
-    port: u16,
     veilid_api: Option<VeilidAPI>,
     update_rx: Option<broadcast::Receiver<VeilidUpdate>>,
     groups: HashMap<CryptoKey, Box<Group>>,
@@ -38,26 +38,33 @@ pub struct Backend {
     pub iroh_blobs: Option<VeilidIrohBlobs>,
 }
 
+pub struct Backend {
+    inner: Arc<Mutex<BackendInner>>,
+}
+
 impl Backend {
     pub fn new(base_path: &Path, port: u16) -> Result<Self> {
-        Ok(Backend {
+        let inner = BackendInner {
             path: base_path.to_path_buf(),
-            port,
             veilid_api: None,
             update_rx: None,
             groups: HashMap::new(),
             repos: HashMap::new(),
             iroh_blobs: None,
-        })
+        };
+
+        let backend = Backend {
+            inner: Arc::new(Mutex::new(inner)),
+        };
+
+        Ok(backend)
     }
 
-    pub async fn start(&mut self) -> Result<()> {
-        println!(
-            "Starting on {} with port {}",
-            self.path.display(),
-            self.port
-        );
-        let base_dir = &self.path;
+    pub async fn start(&self) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        println!("Starting on {}", inner.path.display());
+
+        let base_dir = &inner.path;
         fs::create_dir_all(base_dir).await.map_err(|e| {
             anyhow!(
                 "Failed to create base directory {}: {}",
@@ -106,43 +113,43 @@ impl Backend {
             network: Default::default(),
         };
 
-        if self.veilid_api.is_none() {
+        if inner.veilid_api.is_none() {
             let veilid_api = api_startup_config(update_callback, config_inner)
                 .await
                 .map_err(|e| anyhow!("Failed to initialize Veilid API: {}", e))?;
-            self.veilid_api = Some(veilid_api);
+            inner.veilid_api = Some(veilid_api);
         } else {
             return Err(anyhow!("Veilid already initialized"));
         }
 
-        self.veilid_api.clone().unwrap().attach().await?;
+        inner.veilid_api.clone().unwrap().attach().await?;
 
         println!("Waiting for network ready state");
 
-        self.update_rx = Some(update_rx);
+        inner.update_rx = Some(update_rx);
 
         // Wait for network ready state
-        if let Some(rx) = &self.update_rx {
-            self.wait_for_network(rx.resubscribe()).await?;
+        if let Some(rx) = &inner.update_rx {
+            wait_for_network(rx.resubscribe()).await?;
         }
 
         // Initialize iroh_blobs store
-        let store = iroh_blobs::store::fs::Store::load(self.path.join("iroh")).await?;
+        let store = iroh_blobs::store::fs::Store::load(inner.path.join("iroh")).await?;
 
         // Get veilid_api and routing_context
-        let veilid_api = self.veilid_api.clone().unwrap();
+        let veilid_api = inner.veilid_api.clone().unwrap();
         let routing_context = veilid_api.routing_context()?;
 
         // Create route_id and route_id_blob
         let (route_id, route_id_blob) = make_route(&veilid_api).await?;
 
         // Initialize iroh_blobs
-        self.iroh_blobs = Some(VeilidIrohBlobs::new(
+        inner.iroh_blobs = Some(VeilidIrohBlobs::new(
             veilid_api.clone(),
             routing_context,
             route_id_blob,
             route_id,
-            self.update_rx.as_ref().unwrap().resubscribe(),
+            inner.update_rx.as_ref().unwrap().resubscribe(),
             store,
             None,
             None,
@@ -152,46 +159,33 @@ impl Backend {
     }
 
     pub async fn stop(&mut self) -> Result<()> {
+        let mut inner = self.inner.lock().await;
         println!("Stopping Backend...");
-        if let Some(iroh_blobs) = self.iroh_blobs.take() {
+        if let Some(iroh_blobs) = inner.iroh_blobs.take() {
             println!("Shutting down Veilid Iroh Blobs");
             iroh_blobs.shutdown().await?;
             println!("Veilid Iroh Blobs shut down successfully");
         }
-        if self.veilid_api.is_some() {
+        if inner.veilid_api.is_some() {
             println!("Shutting down Veilid API");
-            let veilid = self.veilid_api.take();
+            let veilid = inner.veilid_api.take();
             veilid.unwrap().shutdown().await;
             println!("Veilid API shut down successfully");
-            self.groups = HashMap::new();
-            self.repos = HashMap::new();
+            inner.groups = HashMap::new();
+            inner.repos = HashMap::new();
         }
         Ok(())
     }
 
-    async fn wait_for_network(
-        &self,
-        mut update_rx: broadcast::Receiver<VeilidUpdate>,
-    ) -> Result<()> {
-        while let Ok(update) = update_rx.recv().await {
-            if let VeilidUpdate::Attachment(attachment_state) = update {
-                if attachment_state.public_internet_ready {
-                    println!("Public internet ready!");
-                    break;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn join_from_url(&mut self, url_string: &str) -> Result<Box<Group>> {
+    pub async fn join_from_url(&self, url_string: &str) -> Result<Box<Group>> {
         let keys = parse_url(url_string)?;
         self.join_group(keys).await
     }
 
-    pub async fn join_group(&mut self, keys: CommonKeypair) -> Result<Box<Group>> {
-        let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
-        let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
+    pub async fn join_group(&self, keys: CommonKeypair) -> Result<Box<Group>> {
+        let mut inner = self.inner.lock().await;
+        let routing_context = inner.veilid_api.as_ref().unwrap().routing_context()?;
+        let crypto_system = CryptoSystemVLD0::new(inner.veilid_api.as_ref().unwrap().crypto()?);
 
         let record_key = TypedKey::new(CRYPTO_KIND_VLD0, keys.id);
         // First open the DHT record
@@ -219,15 +213,16 @@ impl Backend {
             routing_context: Arc::new(routing_context),
             crypto_system,
             repos: Vec::new(),
-            iroh_blobs: self.iroh_blobs.clone(),
+            iroh_blobs: inner.iroh_blobs.clone(),
         };
-        self.groups.insert(group.id(), Box::new(group.clone()));
+        inner.groups.insert(group.id(), Box::new(group.clone()));
 
         Ok(Box::new(group))
     }
 
-    pub async fn create_group(&mut self) -> Result<Group> {
-        let veilid = self
+    pub async fn create_group(&self) -> Result<Group> {
+        let mut inner = self.inner.lock().await;
+        let veilid = inner
             .veilid_api
             .as_ref()
             .ok_or_else(|| anyhow!("Veilid API is not initialized"))?;
@@ -255,7 +250,7 @@ impl Backend {
             encryption_key,
             Arc::new(routing_context),
             crypto_system,
-            self.iroh_blobs.clone(),
+            inner.iroh_blobs.clone(),
         );
 
         let protected_store = veilid.protected_store().unwrap();
@@ -269,25 +264,31 @@ impl Backend {
         .await
         .map_err(|e| anyhow!(e))?;
 
-        self.groups.insert(group.id(), Box::new(group.clone()));
+        inner.groups.insert(group.id(), Box::new(group.clone()));
 
         Ok(group)
     }
 
-    pub async fn get_group(&mut self, record_key: TypedKey) -> Result<Box<Group>> {
-        if let Some(group) = self.groups.get(&record_key.value) {
+    pub async fn get_group(&self, record_key: TypedKey) -> Result<Box<Group>> {
+        let mut inner = self.inner.lock().await;
+        if let Some(group) = inner.groups.get(&record_key.value) {
             return Ok(group.clone());
         }
 
-        let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
-        let protected_store = self.veilid_api.as_ref().unwrap().protected_store().unwrap();
+        let routing_context = inner.veilid_api.as_ref().unwrap().routing_context()?;
+        let protected_store = inner
+            .veilid_api
+            .as_ref()
+            .unwrap()
+            .protected_store()
+            .unwrap();
 
         // Load the keypair associated with the record_key from the protected store
         let retrieved_keypair = CommonKeypair::load_keypair(&protected_store, &record_key.value)
             .await
             .map_err(|_| anyhow!("Failed to load keypair"))?;
 
-        let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
+        let crypto_system = CryptoSystemVLD0::new(inner.veilid_api.as_ref().unwrap().crypto()?);
 
         // First open the DHT record
         let dht_record = routing_context
@@ -314,9 +315,9 @@ impl Backend {
             routing_context: Arc::new(routing_context),
             crypto_system,
             repos: Vec::new(),
-            iroh_blobs: self.iroh_blobs.clone(),
+            iroh_blobs: inner.iroh_blobs.clone(),
         };
-        self.groups.insert(group.id(), Box::new(group.clone()));
+        inner.groups.insert(group.id(), Box::new(group.clone()));
 
         let _ = self.join_group(retrieved_keypair).await;
 
@@ -324,11 +325,13 @@ impl Backend {
     }
 
     pub async fn list_groups(&self) -> Result<Vec<Box<Group>>> {
-        Ok(self.groups.values().cloned().collect())
+        let mut inner = self.inner.lock().await;
+        Ok(inner.groups.values().cloned().collect())
     }
 
-    pub async fn close_group(&mut self, key: CryptoKey) -> Result<()> {
-        if let Some(group) = self.groups.remove(&key) {
+    pub async fn close_group(&self, key: CryptoKey) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        if let Some(group) = inner.groups.remove(&key) {
             group.close().await.map_err(|e| anyhow!(e))?;
         } else {
             return Err(anyhow!("Group not found"));
@@ -336,34 +339,37 @@ impl Backend {
         Ok(())
     }
 
-    pub fn get_protected_store(&self) -> Result<Arc<ProtectedStore>> {
-        self.veilid_api
+    pub async fn get_protected_store(&self) -> Result<Arc<ProtectedStore>> {
+        let mut inner = self.inner.lock().await;
+        inner
+            .veilid_api
             .as_ref()
             .ok_or_else(|| anyhow!("Veilid API not initialized"))
             .map(|api| Arc::new(api.protected_store().unwrap()))
     }
 
-    pub async fn create_repo(&mut self, group_key: &CryptoKey) -> Result<Repo> {
-        let veilid = self
+    pub async fn create_repo(&self, group_key: &CryptoKey) -> Result<Repo> {
+        let mut inner = self.inner.lock().await;
+        let veilid = inner
             .veilid_api
             .as_ref()
             .ok_or_else(|| anyhow!("Veilid API is not initialized"))?;
         let routing_context = veilid.routing_context()?;
 
-        let iroh_blobs = self
+        let iroh_blobs = inner
             .iroh_blobs
             .as_ref()
             .ok_or_else(|| anyhow!("Iroh blobs not initialized"))?;
 
         // Retrieve the group from the Backend's groups map
-        let group = self
+        let group = inner
             .groups
             .get(group_key)
             .ok_or_else(|| anyhow!("Failed to retrieve group"))?
             .as_ref();
 
         // Check if the repo already exists
-        if let Some(existing_repo) = self.repos.get(&group.get_id()) {
+        if let Some(existing_repo) = inner.repos.get(&group.get_id()) {
             println!("Repo already exists with id: {}", existing_repo.get_id());
             return Ok(*existing_repo.clone());
         }
@@ -407,28 +413,34 @@ impl Backend {
         .await
         .map_err(|e| anyhow!(e))?;
 
-        self.repos.insert(repo.get_id(), Box::new(repo.clone()));
+        inner.repos.insert(repo.get_id(), Box::new(repo.clone()));
 
         Ok(repo)
     }
 
-    pub async fn get_repo(&mut self, repo_id: TypedKey) -> Result<Box<Repo>> {
-        if let Some(repo) = self.repos.get(&repo_id.value) {
+    pub async fn get_repo(&self, repo_id: TypedKey) -> Result<Box<Repo>> {
+        let mut inner = self.inner.lock().await;
+        if let Some(repo) = inner.repos.get(&repo_id.value) {
             return Ok(repo.clone());
         }
 
-        let iroh_blobs = self
+        let iroh_blobs = inner
             .iroh_blobs
             .as_ref()
             .ok_or_else(|| anyhow!("Iroh blobs not initialized"))?;
 
-        let protected_store = self.veilid_api.as_ref().unwrap().protected_store().unwrap();
+        let protected_store = inner
+            .veilid_api
+            .as_ref()
+            .unwrap()
+            .protected_store()
+            .unwrap();
 
         // Load keypair using the repo ID
         let retrieved_keypair = CommonKeypair::load_keypair(&protected_store, &repo_id.value)
             .await
             .map_err(|_| anyhow!("Failed to load keypair for repo_id: {:?}", repo_id))?;
-        let routing_context = self.veilid_api.as_ref().unwrap().routing_context()?;
+        let routing_context = inner.veilid_api.as_ref().unwrap().routing_context()?;
         let dht_record = routing_context
             .open_dht_record(repo_id.clone(), None)
             .await?;
@@ -444,7 +456,7 @@ impl Backend {
             )
             .await?;
 
-        let crypto_system = CryptoSystemVLD0::new(self.veilid_api.as_ref().unwrap().crypto()?);
+        let crypto_system = CryptoSystemVLD0::new(inner.veilid_api.as_ref().unwrap().crypto()?);
 
         let repo = Repo {
             dht_record,
@@ -458,7 +470,7 @@ impl Backend {
         };
 
         // Cache the loaded repo for future access
-        self.repos.insert(repo.get_id(), Box::new(repo.clone()));
+        inner.repos.insert(repo.get_id(), Box::new(repo.clone()));
 
         Ok(Box::new(repo))
     }
@@ -488,13 +500,33 @@ impl Backend {
         Ok(root_hash)
     }
 
-    pub fn subscribe_updates(&self) -> Option<broadcast::Receiver<VeilidUpdate>> {
-        self.update_rx.as_ref().map(|rx| rx.resubscribe())
+    pub async fn subscribe_updates(&self) -> Option<broadcast::Receiver<VeilidUpdate>> {
+        let mut inner = self.inner.lock().await;
+        inner.update_rx.as_ref().map(|rx| rx.resubscribe())
     }
 
-    pub fn get_veilid_api(&self) -> Option<&VeilidAPI> {
-        self.veilid_api.as_ref()
+    pub async fn get_veilid_api(&self) -> Option<VeilidAPI> {
+        let mut inner = self.inner.lock().await;
+
+        inner.veilid_api.clone()
     }
+
+    pub async fn get_iroh_blobs(&self) -> Option<VeilidIrohBlobs> {
+        let mut inner = self.inner.lock().await;
+        inner.iroh_blobs.clone()
+    }
+}
+
+async fn wait_for_network(mut update_rx: broadcast::Receiver<VeilidUpdate>) -> Result<()> {
+    while let Ok(update) = update_rx.recv().await {
+        if let VeilidUpdate::Attachment(attachment_state) = update {
+            if attachment_state.public_internet_ready {
+                println!("Public internet ready!");
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn find_query(url: &Url, key: &str) -> Result<String> {

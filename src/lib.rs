@@ -60,8 +60,8 @@ mod tests {
             .expect("Unable to create repo");
 
         let iroh_blobs = backend
-            .iroh_blobs
-            .as_ref()
+            .get_iroh_blobs()
+            .await
             .expect("iroh_blobs not initialized");
 
         // Prepare data to upload as a blob
@@ -159,7 +159,7 @@ mod tests {
             .await
             .expect(GROUP_NOT_FOUND);
 
-        let protected_store = backend.get_protected_store().unwrap();
+        let protected_store = backend.get_protected_store().await.unwrap();
         let keypair_data = protected_store
             .load_user_secret(group.id().to_string())
             .await
@@ -277,11 +277,13 @@ mod tests {
                 .expect("Unable to create repo");
             let veilid_api = backend
                 .get_veilid_api()
+                .await
                 .expect("Failed to get VeilidAPI instance");
 
             // Get the update receiver from the backend
             let update_rx = backend
                 .subscribe_updates()
+                .await
                 .expect("Failed to subscribe to updates");
 
             // Set up a channel to receive AppMessage updates
@@ -324,7 +326,7 @@ mod tests {
             println!("Sending message to owner...");
 
             // Send the message
-            repo.send_message_to_owner(veilid_api, message.clone(), ROUTE_ID_DHT_KEY)
+            repo.send_message_to_owner(&veilid_api, message.clone(), ROUTE_ID_DHT_KEY)
                 .await
                 .expect("Failed to send message to repo owner");
 
@@ -487,6 +489,7 @@ mod tests {
         // Verify that the file was uploaded and the hash was written to the DHT
         let dht_value = backend
             .get_veilid_api()
+            .await
             .expect("veilid_api not initialized")
             .routing_context()
             .expect("Failed to get routing context")
@@ -557,7 +560,7 @@ mod tests {
             .await
             .expect("Failed to write to temp file");
 
-        let protected_store = backend.get_protected_store().unwrap();
+        let protected_store = backend.get_protected_store().await.unwrap();
 
         let repo = backend.create_repo(&group.id()).await?;
 
@@ -570,6 +573,7 @@ mod tests {
         // Verify that the file was uploaded and the hash was written to the DHT
         let dht_value = backend
             .get_veilid_api()
+            .await
             .expect("veilid_api not initialized")
             .routing_context()
             .expect("Failed to get routing context")
