@@ -161,6 +161,74 @@ impl Repo {
         self.update_hash_on_dht(&hash).await?;
         Ok(hash)
     }
+
+    // Method to get or create a collection associated with the repo
+    pub async fn get_or_create_collection(&self) -> Result<Hash> {
+        self.check_write_permissions()?;
+        let collection_name = self.get_name().await?;
+
+        match self.iroh_blobs.collection_hash(&collection_name).await {
+            Ok(collection_hash) => Ok(collection_hash),
+            Err(_) => self.iroh_blobs.create_collection(&collection_name).await,
+        }
+    }
+
+    // Method to add a file to the collection identified by repo ID
+    pub async fn set_file_in_repo_collection(&self, file_name: &str, file_hash: Hash) -> Result<Hash> {
+        self.check_write_permissions()?;
+        let collection_name = self.get_name().await?;
+
+        self.iroh_blobs.set_file(&collection_name, file_name, &file_hash).await
+    }
+
+    // Method to retrieve a file's hash from the collection
+    pub async fn get_file_from_repo_collection(&self, file_name: &str) -> Result<Hash> {
+        let collection_name = self.get_name().await?;
+
+        self.iroh_blobs.get_file(&collection_name, file_name).await
+    }
+
+    // Method to list all files in the collection
+    pub async fn list_files_in_repo_collection(&self) -> Result<Vec<String>> {
+        let collection_name = self.get_name().await?;
+
+        self.iroh_blobs.list_files(&collection_name).await
+    }
+
+    // Method to delete a file from the collection
+    pub async fn delete_file_from_repo_collection(&self, file_name: &str) -> Result<Hash> {
+        self.check_write_permissions()?;
+        let collection_name = self.get_name().await?;
+
+        self.iroh_blobs.delete_file(&collection_name, file_name).await
+    }
+
+    // Method to get the collection's hash
+    pub async fn get_collection_hash(&self) -> Result<Hash> {
+        let collection_name = self.get_name().await?;
+
+        self.iroh_blobs.collection_hash(&collection_name).await
+    }
+
+    // Method to upload a file to the collection via a file stream
+    pub async fn upload_to_collection(&self, file_name: &str, data_to_upload: Vec<u8>) -> Result<Hash> {
+        self.check_write_permissions()?;
+        let collection_name = self.get_name().await?;
+
+        let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
+        tx.send(Ok(Bytes::from(data_to_upload.clone()))).await.unwrap();
+        drop(tx);
+
+        self.iroh_blobs.upload_to(&collection_name, file_name, rx).await
+    }
+
+    // Helper method to check if the repo can write
+    fn check_write_permissions(&self) -> Result<()> {
+        if !self.can_write() {
+            return Err(anyhow::Error::msg("Repo does not have write permissions"));
+        }
+        Ok(())
+    }
 }
 
 impl DHTEntity for Repo {
@@ -169,7 +237,7 @@ impl DHTEntity for Repo {
     }
 
     fn get_encryption_key(&self) -> SharedSecret {
-        self.encryption_key.clone()
+        self.encryption_key.clone() 
     }
 
     fn get_routing_context(&self) -> Arc<RoutingContext> {
