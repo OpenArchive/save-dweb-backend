@@ -225,7 +225,7 @@ impl Repo {
     }
 
     // Method to upload a file to the collection via a file stream
-    pub async fn upload_to_collection(&self, file_name: &str, data_to_upload: Vec<u8>) -> Result<Hash> {
+    pub async fn upload(&self, file_name: &str, data_to_upload: Vec<u8>) -> Result<Hash> {
         self.check_write_permissions()?;
         let collection_name = self.get_name().await?;
 
