@@ -4,7 +4,7 @@
 use crate::constants::ROUTE_ID_DHT_KEY;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use std::{path::PathBuf, path::Path, sync::Arc};
+use std::{path::Path, path::PathBuf, sync::Arc};
 use tokio::sync::broadcast::{self, Receiver};
 use veilid_core::{
     CryptoKey, CryptoSystem, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, KeyPair, Nonce,

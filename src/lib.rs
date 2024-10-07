@@ -841,6 +841,11 @@ mod tests {
             .await
             .expect("Unable to join group on second peer");
 
+        assert!(
+            !new_file_collection_hash.as_bytes().is_empty(),
+            "New collection hash after uploading a file should not be empty"
+        );
+        println!("Asking peers");
         // Add delay to allow peers to propagate the hash
         sleep(Duration::from_secs(5)).await;
         println!("Asking peers!");
@@ -1043,7 +1048,6 @@ mod tests {
         let path = TmpDir::new("test_repo_collection_management")
             .await
             .unwrap();
-        let port = 8080;
         fs::create_dir_all(path.as_ref())
             .await
             .expect("Failed to create base directory");
@@ -1082,8 +1086,11 @@ mod tests {
         );
 
         // Step 6: Use iroh_blobs set_file to update the collection with the uploaded file
-        let blobs_future = backend.get_iroh_blobs().await;
-        let iroh_blobs = blobs_future.as_ref().expect("iroh_blobs not initialized");
+        let iroh_blobs = backend
+            .get_iroh_blobs()
+            .await
+            .expect("iroh_blobs not initialized");
+
         let collection_name = repo.get_name().await.expect("Failed to get repo name");
         let updated_collection_hash = repo
             .set_file_and_update_dht(&collection_name, file_name, &file_hash)
@@ -1138,7 +1145,6 @@ mod tests {
         let path = TmpDir::new("test_backend_collection_hash_consistency")
             .await
             .unwrap();
-        let port = 8080;
         fs::create_dir_all(path.as_ref())
             .await
             .expect("Failed to create base directory");
