@@ -55,7 +55,7 @@ impl Repo {
     }
 
     pub async fn update_route_on_dht(&self) -> Result<()> {
-        let route_id_blob = self.iroh_blobs.route_id_blob();
+        let route_id_blob = self.iroh_blobs.route_id_blob().await;
 
         // Set the root hash in the DHT record
         self.routing_context
@@ -90,7 +90,7 @@ impl Repo {
 
     pub async fn get_route_id_blob(&self) -> Result<Vec<u8>> {
         if self.can_write() {
-            return Ok(self.iroh_blobs.route_id_blob());
+            return Ok(self.iroh_blobs.route_id_blob().await);
         }
 
         let value = self
