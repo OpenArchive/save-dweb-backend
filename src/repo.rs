@@ -189,11 +189,16 @@ impl Repo {
 
     // Method to retrieve a file's hash from the collection
     pub async fn get_file_hash(&self, file_name: &str) -> Result<Hash> {
-        let collection_name = self.get_name().await?;
+        // Ensure the collection exists before reading
+        self.get_or_create_collection().await?;
 
+        let collection_name = self.get_name().await?;
         self.iroh_blobs.get_file(&collection_name, file_name).await
     }
     pub async fn list_files(&self) -> Result<Vec<String>> {
+        // Ensure the collection exists before listing files
+        self.get_or_create_collection().await?;
+        
         self.check_write_permissions()?;
         self.list_files_in_repo_collection().await
     }
@@ -207,6 +212,10 @@ impl Repo {
     // Method to delete a file from the collection
     pub async fn delete_file(&self, file_name: &str) -> Result<Hash> {
         self.check_write_permissions()?;
+
+        // Ensure the collection exists before deleting a file
+        self.get_or_create_collection().await?;
+
         let collection_name = self.get_name().await?;
 
         let deleted_hash = self.iroh_blobs.delete_file(&collection_name, file_name).await?;
@@ -227,6 +236,10 @@ impl Repo {
     // Method to upload a file to the collection via a file stream
     pub async fn upload(&self, file_name: &str, data_to_upload: Vec<u8>) -> Result<Hash> {
         self.check_write_permissions()?;
+
+        // Ensure the collection exists before uploading
+        self.get_or_create_collection().await?;
+
         let collection_name = self.get_name().await?;
 
         let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
