@@ -160,48 +160,6 @@ impl Group {
         }
     }
 
-    pub async fn replicate_from_dht(&self) -> Result<()> {
-        // Fetch the latest collection hash from the DHT
-        let collection_hash = self.repo.get_hash_from_dht().await?;
-    
-        // List the files using the collection hash 
-        let file_list = self.list_files_from_collection_hash(&collection_hash).await?;
-    
-        // Download each file from peers using its hash
-        for file_name in file_list {
-            // For each file, get its hash and download it from peers
-            let file_hash = self.repo.get_file_hash(&collection_hash, &file_name).await?;
-
-            // Download the file from peers
-            self.download_hash_from_peers(&file_hash).await?;
-        }
-    
-        Ok(())
-    }
-
-    pub async fn list_files_from_collection_hash(&self, collection_hash: &Hash) -> Result<Vec<String>> {
-        // Fetch the collection data using the collection hash
-        let entry = self
-            .store
-            .get(collection_hash)
-            .await?
-            .ok_or_else(|| anyhow!("Collection not found for hash: {}", collection_hash))?;
-    
-        // Create a data reader for the entry
-        let mut reader = entry.data_reader();
-    
-        // Read the serialized collection data
-        let collection_data: Bytes = reader.read_to_end().await?;
-    
-        // Deserialize the collection into a HashMap
-        let collection: HashMap<String, Hash> = from_slice(&collection_data).map_err(|err| {
-            println!("Error deserializing collection: {:?}", err);
-            anyhow!("Failed to deserialize collection: {:?}", err)
-        })?;
-    
-        // Return the list of file names (keys in the HashMap)
-        Ok(collection.keys().cloned().collect())
-    }    
 
     pub fn get_url(&self) -> String {
         let mut url = Url::parse(format!("{0}:?", PROTOCOL_SCHEME).as_str()).unwrap();
