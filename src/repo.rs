@@ -203,10 +203,13 @@ impl Repo {
         self.iroh_blobs.get_file(&collection_name, file_name).await
     }
     pub async fn list_files(&self) -> Result<Vec<String>> {
+        if self.check_write_permissions().is_err() {
+            // If the repo is read-only, fetch the list of files from the collection hash in the DHT
+            return self.list_files_from_collection_hash().await;
+        }
         // Ensure the collection exists before listing files
         self.get_or_create_collection().await?;
-        
-        self.check_write_permissions()?;
+                
         self.list_files_in_repo_collection().await
     }
     // Method to list all files in the collection
