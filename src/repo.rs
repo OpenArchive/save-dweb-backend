@@ -169,22 +169,22 @@ impl Repo {
     }
 
     // Method to get or create a collection associated with the repo
-    pub async fn get_or_create_collection(&self) -> Result<Hash> {
+    async fn get_or_create_collection(&self) -> Result<Hash> {
         self.check_write_permissions()?;
         let collection_name = self.get_name().await?;
 
-        match self.iroh_blobs.collection_hash(&collection_name).await {
-            Ok(collection_hash) => Ok(collection_hash),
-            Err(_) => self.iroh_blobs.create_collection(&collection_name).await,
-        }
-    }
+        let collection_hash = match self.iroh_blobs.collection_hash(&collection_name).await {
+            Ok(hash) => hash,
+            Err(_) => {
+                // Create the collection if it doesn't exist
+                let new_hash = self.iroh_blobs.create_collection(&collection_name).await?;
+                // Update the DHT with the new collection hash
+                self.update_collection_on_dht().await?;
+                new_hash
+            },
+        };
 
-    // Method to add a file to the collection identified by repo ID
-    pub async fn set_file_in_repo_collection(&self, file_name: &str, file_hash: Hash) -> Result<Hash> {
-        self.check_write_permissions()?;
-        let collection_name = self.get_name().await?;
-
-        self.iroh_blobs.set_file(&collection_name, file_name, &file_hash).await
+        Ok(collection_hash)
     }
 
     // Method to retrieve a file's hash from the collection
