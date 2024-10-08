@@ -1,15 +1,22 @@
-use eyre::{anyhow, Error, Result};
-use hex::ToHex;
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use url::Url;
-use veilid_core::{
-    CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, RoutingContext, SharedSecret,
-    TypedKey,
-};
-
 use crate::common::DHTEntity;
 use crate::repo::Repo;
+use anyhow::{anyhow, Error, Result};
+use bytes::Bytes;
+use hex::ToHex;
+use iroh_blobs::Hash;
+use rand::seq::SliceRandom;
+use rand::thread_rng;
+use serde::{Deserialize, Serialize};
+use std::any::Any;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use url::Url;
+use veilid_core::{
+    CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, ProtectedStore, RoutingContext,
+    SharedSecret, TypedKey,
+};
+use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 
 pub const PROTOCOL_SCHEME: &str = "save+dweb:";
 pub const URL_DHT_KEY: &str = "dht";
@@ -24,6 +31,7 @@ pub struct Group {
     pub routing_context: Arc<RoutingContext>,
     pub crypto_system: CryptoSystemVLD0,
     pub repos: Vec<Repo>,
+    pub iroh_blobs: Option<VeilidIrohBlobs>,
 }
 
 impl Group {
@@ -32,6 +40,7 @@ impl Group {
         encryption_key: SharedSecret,
         routing_context: Arc<RoutingContext>,
         crypto_system: CryptoSystemVLD0,
+        iroh_blobs: Option<VeilidIrohBlobs>,
     ) -> Self {
         Self {
             dht_record,
@@ -39,6 +48,7 @@ impl Group {
             routing_context,
             crypto_system,
             repos: Vec::new(),
+            iroh_blobs,
         }
     }
 
@@ -54,13 +64,92 @@ impl Group {
         self.dht_record.owner_secret().cloned()
     }
 
-    pub async fn add_repo(&mut self, repo: Repo) -> Result<()> {
+    pub fn add_repo(&mut self, repo: Repo) -> Result<()> {
         self.repos.push(repo);
         Ok(())
     }
 
-    pub async fn list_repos(&self) -> Vec<CryptoKey> {
+    pub fn list_repos(&self) -> Vec<CryptoKey> {
         self.repos.iter().map(|repo| repo.get_id()).collect()
+    }
+
+    pub fn get_own_repo(&self) -> Option<&Repo> {
+        self.repos.iter().find(|repo| repo.can_write())
+    }
+
+    pub fn list_peer_repos(&self) -> Vec<&Repo> {
+        self.repos.iter().filter(|repo| !repo.can_write()).collect()
+    }
+
+    pub async fn download_hash_from_peers(&self, hash: &Hash) -> Result<()> {
+        let iroh_blobs = match self.iroh_blobs.as_ref() {
+            Some(iroh_blobs) => iroh_blobs,
+            None => return Err(anyhow!("Iroh not initialized")),
+        };
+
+        // Ask peers to download in random order
+        let mut rng = thread_rng();
+        let mut repos = self.list_peer_repos();
+        repos.shuffle(&mut rng);
+
+        for repo in repos.iter() {
+            if let Ok(route_id_blob) = repo.get_route_id_blob().await {
+                // It's faster to try and fail, than to ask then try
+                if (iroh_blobs.download_file_from(route_id_blob, hash).await).is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+
+        Err(anyhow!("Unable to download from any peer"))
+    }
+
+    pub async fn peers_have_hash(&self, hash: &Hash) -> Result<bool> {
+        let iroh_blobs = match self.iroh_blobs.as_ref() {
+            Some(iroh_blobs) => iroh_blobs,
+            None => return Err(anyhow!("Iroh not initialized")),
+        };
+
+        for repo in self.list_peer_repos().iter() {
+            if let Ok(route_id_blob) = repo.get_route_id_blob().await {
+                if let Ok(has) = iroh_blobs.ask_hash(route_id_blob, *hash).await {
+                    if has {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    pub async fn has_hash(&self, hash: &Hash) -> Result<bool> {
+        let iroh_blobs = match self.iroh_blobs.as_ref() {
+            Some(iroh_blobs) => iroh_blobs,
+            None => return Err(anyhow!("Iroh not initialized")),
+        };
+
+        let has = iroh_blobs.has_hash(hash).await;
+
+        Ok(has)
+    }
+
+    pub async fn get_stream_from_hash(
+        &self,
+        hash: &Hash,
+    ) -> Result<mpsc::Receiver<std::io::Result<Bytes>>> {
+        let iroh_blobs = match self.iroh_blobs.as_ref() {
+            Some(iroh_blobs) => iroh_blobs,
+            None => return Err(anyhow!("Iroh not initialized")),
+        };
+
+        if self.has_hash(hash).await? {
+            self.download_hash_from_peers(hash).await?
+        }
+
+        let receiver = iroh_blobs.read_file(*hash).await.unwrap();
+
+        Ok(receiver)
     }
 
     pub async fn get_repo_name(&self, repo_key: CryptoKey) -> Result<String> {
