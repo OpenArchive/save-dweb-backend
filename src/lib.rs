@@ -946,4 +946,112 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    #[serial]
+    async fn test_repo_collection_management() -> Result<()> {
+        // Setup a temporary directory and initialize the backend
+        let path = TmpDir::new("test_repo_collection_management").await.unwrap();
+        let port = 8080;
+        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+
+        // Initialize the backend
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        // Step 1: Create a group
+        let mut group = backend.create_group().await.expect("Failed to create group");
+
+        // Step 2: Create a repo and verify it can write (i.e., has a secret key)
+        let mut repo = backend
+            .create_repo(&group.id())
+            .await
+            .expect("Failed to create repo");
+
+        assert!(repo.can_write(), "Repo should have write access");
+
+        // Step 3: Set the repo name
+        let repo_name = "Test Repo";
+
+        repo.set_name(repo_name)
+            .await
+            .expect("Unable to set repo name");
+
+        // Step 4: Add the repo to the group
+        group.add_repo(repo.clone()).expect("Failed to add repo to group");
+
+         // Step 5: Upload a file, which implicitly creates the collection
+        let file_name = "example.txt";
+        let file_content = b"Test content for file upload";
+
+        // Upload the file (this will automatically create or get the collection)
+        let file_hash = repo.upload(file_name, file_content.to_vec()).await?;
+        assert!(!file_hash.as_bytes().is_empty(), "File hash should not be empty after upload");
+       
+        // Step 6: Use iroh_blobs set_file to update the collection with the uploaded file
+        let iroh_blobs = backend.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
+        let collection_name = repo.get_name().await.expect("Failed to get repo name");
+        let updated_collection_hash = iroh_blobs.set_file(&collection_name, &file_name.to_string(), &file_hash).await?;
+        assert!(!updated_collection_hash.as_bytes().is_empty(), "Updated collection hash should not be empty after adding file");
+
+        // Step 7: Verify the file is listed in the collection
+        let file_list = repo.list_files().await?;
+        assert_eq!(file_list.len(), 1, "There should be one file in the collection");
+        assert_eq!(file_list[0], file_name, "The listed file should match the uploaded file");
+
+        // Step 8: Retrieve the file hash from the collection and verify it matches the uploaded hash
+        let retrieved_file_hash = repo.get_file_hash(file_name).await?;
+        assert_eq!(file_hash, retrieved_file_hash, "The retrieved file hash should match the uploaded file hash");
+
+        // Step 9: Delete the file from the collection
+        let collection_hash_after_deletion = repo.delete_file(file_name).await?;
+        assert!(!collection_hash_after_deletion.as_bytes().is_empty(), "Collection hash should not be empty after file deletion");
+
+        // Step 10: Verify the file is no longer listed in the collection
+        let file_list_after_deletion = repo.list_files().await?;
+        assert!(file_list_after_deletion.is_empty(), "The file list should be empty after deleting the file");
+
+        // Final Step -> Clean up 
+        backend.stop().await.expect("Unable to stop backend");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_collection_hash_consistency() -> Result<()> {
+        // Setup temporary directory and initialize the backend
+        let path = TmpDir::new("test_backend_collection_hash_consistency").await.unwrap();
+        let port = 8080;
+        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+
+        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        // Step 1: Create a group and a collection
+        let group = backend.create_group().await.expect("Unable to create group");
+        let collection_name = "hash_consistency_collection".to_string();
+        let iroh_blobs = backend.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
+
+        // Step 2: Create collection and get initial hash
+        let initial_collection_hash = iroh_blobs.create_collection(&collection_name).await.expect("Failed to create collection");
+        
+        // Step 3: Upload a file to the collection
+        let file_path = path.as_ref().join("file1.txt");
+        let file_content = b"Content of file 1";
+        fs::write(&file_path, file_content).await.expect("Failed to write file 1");
+
+        let file_hash = iroh_blobs.upload_from_path(file_path.clone()).await.expect("Failed to upload file 1");
+        let updated_collection_hash = iroh_blobs.set_file(&collection_name, "file1.txt", &file_hash).await.expect("Failed to set file in collection");
+
+        // Verify that the collection hash changed after adding a file
+        assert_ne!(initial_collection_hash, updated_collection_hash, "The collection hash should change after a file is added");
+
+        // Step 4: Remove the file and verify the hash changes again
+        let final_collection_hash = iroh_blobs.delete_file(&collection_name, "file1.txt").await.expect("Failed to delete file from collection");
+
+        assert_ne!(updated_collection_hash, final_collection_hash, "The collection hash should change after a file is removed");
+
+        // Clean up
+        backend.stop().await.expect("Unable to stop backend");
+        Ok(())
+    }
 }

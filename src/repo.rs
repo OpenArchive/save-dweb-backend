@@ -150,6 +150,12 @@ impl Repo {
         Ok(hash)
     }
 
+    pub async fn update_collection_on_dht(&self) -> Result<()> {
+        let collection_hash = self.get_collection_hash().await?;
+        self.update_hash_on_dht(&collection_hash).await
+    }
+    
+
     pub async fn upload_blob(&self, file_path: PathBuf) -> Result<Hash> {
         if !self.can_write() {
             return Err(anyhow!("Cannot upload blob, repo is not writable"));
@@ -161,6 +167,100 @@ impl Repo {
         self.update_hash_on_dht(&hash).await?;
         Ok(hash)
     }
+
+    // Method to get or create a collection associated with the repo
+    async fn get_or_create_collection(&self) -> Result<Hash> {
+        self.check_write_permissions()?;
+        let collection_name = self.get_name().await?;
+
+        let collection_hash = match self.iroh_blobs.collection_hash(&collection_name).await {
+            Ok(hash) => hash,
+            Err(_) => {
+                // Create the collection if it doesn't exist
+                let new_hash = self.iroh_blobs.create_collection(&collection_name).await?;
+                // Update the DHT with the new collection hash
+                self.update_collection_on_dht().await?;
+                new_hash
+            },
+        };
+
+        Ok(collection_hash)
+    }
+
+    // Method to retrieve a file's hash from the collection
+    pub async fn get_file_hash(&self, file_name: &str) -> Result<Hash> {
+        // Ensure the collection exists before reading
+        self.get_or_create_collection().await?;
+
+        let collection_name = self.get_name().await?;
+        self.iroh_blobs.get_file(&collection_name, file_name).await
+    }
+    pub async fn list_files(&self) -> Result<Vec<String>> {
+        // Ensure the collection exists before listing files
+        self.get_or_create_collection().await?;
+        
+        self.check_write_permissions()?;
+        self.list_files_in_repo_collection().await
+    }
+    // Method to list all files in the collection
+    async fn list_files_in_repo_collection(&self) -> Result<Vec<String>> {
+        let collection_name = self.get_name().await?;
+
+        self.iroh_blobs.list_files(&collection_name).await
+    }
+
+    // Method to delete a file from the collection
+    pub async fn delete_file(&self, file_name: &str) -> Result<Hash> {
+        self.check_write_permissions()?;
+
+        // Ensure the collection exists before deleting a file
+        self.get_or_create_collection().await?;
+
+        let collection_name = self.get_name().await?;
+
+        let deleted_hash = self.iroh_blobs.delete_file(&collection_name, file_name).await?;
+
+        // Update the DHT with the new collection hash
+        self.update_collection_on_dht().await?;
+    
+        Ok(deleted_hash)
+    }
+
+    // Method to get the collection's hash
+   async fn get_collection_hash(&self) -> Result<Hash> {
+        let collection_name = self.get_name().await?;
+
+        self.iroh_blobs.collection_hash(&collection_name).await
+    }
+
+    // Method to upload a file to the collection via a file stream
+    pub async fn upload(&self, file_name: &str, data_to_upload: Vec<u8>) -> Result<Hash> {
+        self.check_write_permissions()?;
+
+        // Ensure the collection exists before uploading
+        self.get_or_create_collection().await?;
+
+        let collection_name = self.get_name().await?;
+
+        let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
+        tx.send(Ok(Bytes::from(data_to_upload.clone()))).await.unwrap();
+        drop(tx);
+
+        let file_hash = self.iroh_blobs.upload_to(&collection_name, file_name, rx).await?;
+
+        // Update the collection hash on the DHT
+        self.update_collection_on_dht().await?;
+
+        Ok(file_hash) 
+    }
+
+    // Helper method to check if the repo can write
+    fn check_write_permissions(&self) -> Result<()> {
+        if !self.can_write() {
+            return Err(anyhow::Error::msg("Repo does not have write permissions"));
+        }
+        Ok(())
+    }
 }
 
 impl DHTEntity for Repo {
@@ -169,7 +269,7 @@ impl DHTEntity for Repo {
     }
 
     fn get_encryption_key(&self) -> SharedSecret {
-        self.encryption_key.clone()
+        self.encryption_key.clone() 
     }
 
     fn get_routing_context(&self) -> Arc<RoutingContext> {
