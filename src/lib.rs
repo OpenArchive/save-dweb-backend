@@ -990,7 +990,7 @@ mod tests {
         // Step 6: Use iroh_blobs set_file to update the collection with the uploaded file
         let iroh_blobs = backend.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
         let collection_name = repo.get_name().await.expect("Failed to get repo name");
-        let updated_collection_hash = iroh_blobs.set_file(&collection_name, &file_name, &file_hash).await?;
+        let updated_collection_hash = iroh_blobs.set_file(&collection_name, file_name, &file_hash).await?;
         assert!(!updated_collection_hash.as_bytes().is_empty(), "Updated collection hash should not be empty after adding file");
 
         // Step 7: Verify the file is listed in the collection
