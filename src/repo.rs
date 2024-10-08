@@ -223,27 +223,10 @@ impl Repo {
         // Fetch the latest collection hash from the DHT
         let collection_hash = self.get_hash_from_dht().await?;
 
-        // Fetch the collection data using the collection hash
-        let entry = self.iroh_blobs
-            .store
-            .get(&collection_hash)
-            .await?
-            .ok_or_else(|| anyhow!("Collection not found for hash: {}", collection_hash))?;
-    
-        // Create a data reader for the entry
-        let mut reader = entry.data_reader();
-    
-        // Read the serialized collection data
-        let collection_data: Bytes = reader.read_to_end().await?;
-    
-        // Deserialize the collection into a HashMap
-        let collection: HashMap<String, Hash> = from_slice(&collection_data).map_err(|err| {
-            println!("Error deserializing collection: {:?}", err);
-            anyhow!("Failed to deserialize collection: {:?}", err)
-        })?;
-    
-        // Return the list of file names (keys in the HashMap)
-        Ok(collection.keys().cloned().collect())
+        // Use the method from VeilidIrohBlobs to list the files using the collection hash
+        let file_list = self.iroh_blobs.list_files_from_hash(&collection_hash).await?;
+
+        Ok(file_list)
     }    
 
     // Method to delete a file from the collection
