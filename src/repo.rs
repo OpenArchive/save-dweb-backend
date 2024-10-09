@@ -291,9 +291,8 @@ impl Repo {
         // Ensure the collection exists before uploading
         let collection_hash = self.get_or_create_collection().await?;
 
-        // Get the collection name from the collection hash if needed
-        let collection_name = self.iroh_blobs.get_name_from_hash(&collection_hash).await?;
-
+        // Use the repo name 
+        let collection_name = self.get_name().await?;
         let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
         tx.send(Ok(Bytes::from(data_to_upload.clone()))).await.unwrap();
         drop(tx);
