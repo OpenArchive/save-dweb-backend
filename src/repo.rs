@@ -5,6 +5,8 @@ use bytes::{BufMut, Bytes, BytesMut};
 use futures_core::stream::Stream;
 use iroh_blobs::Hash;
 use serde::{Deserialize, Serialize};
+use serde_cbor::from_slice;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::{io::ErrorKind, path::PathBuf};
 use tokio::sync::{broadcast, mpsc};
@@ -170,21 +172,26 @@ impl Repo {
 
     // Method to get or create a collection associated with the repo
     async fn get_or_create_collection(&self) -> Result<Hash> {
-        self.check_write_permissions()?;
+        // Get the collection name  
         let collection_name = self.get_name().await?;
+        
+        // Try to retrieve the collection hash
+        if let Ok(collection_hash) = self.iroh_blobs.collection_hash(&collection_name).await {
+            // If the collection exists, return the hash
+            return Ok(collection_hash);
+        }
 
-        let collection_hash = match self.iroh_blobs.collection_hash(&collection_name).await {
-            Ok(hash) => hash,
-            Err(_) => {
-                // Create the collection if it doesn't exist
-                let new_hash = self.iroh_blobs.create_collection(&collection_name).await?;
-                // Update the DHT with the new collection hash
-                self.update_collection_on_dht().await?;
-                new_hash
-            },
-        };
+        // If we get here, the collection doesn't exist, so check write permissions
+        self.check_write_permissions()?;
 
-        Ok(collection_hash)
+        // Create the collection if we have write permissions
+        let new_hash = self.iroh_blobs.create_collection(&collection_name).await?;
+
+        // Update the DHT with the new collection hash
+        self.update_collection_on_dht().await?;
+        
+        // Return the new collection hash
+        Ok(new_hash)
     }
 
     // Method to retrieve a file's hash from the collection
@@ -196,10 +203,13 @@ impl Repo {
         self.iroh_blobs.get_file(&collection_name, file_name).await
     }
     pub async fn list_files(&self) -> Result<Vec<String>> {
+        if !self.can_write() {
+            // If the repo is read-only, fetch the list of files from the collection hash in the DHT
+            return self.list_files_from_collection_hash().await;
+        }
         // Ensure the collection exists before listing files
         self.get_or_create_collection().await?;
-        
-        self.check_write_permissions()?;
+                
         self.list_files_in_repo_collection().await
     }
     // Method to list all files in the collection
@@ -208,6 +218,16 @@ impl Repo {
 
         self.iroh_blobs.list_files(&collection_name).await
     }
+
+    pub async fn list_files_from_collection_hash(&self) -> Result<Vec<String>> {
+        // Fetch the latest collection hash from the DHT
+        let collection_hash = self.get_hash_from_dht().await?;
+
+        // Use the method from VeilidIrohBlobs to list the files using the collection hash
+        let file_list = self.iroh_blobs.list_files_from_hash(&collection_hash).await?;
+
+        Ok(file_list)
+    }    
 
     // Method to delete a file from the collection
     pub async fn delete_file(&self, file_name: &str) -> Result<Hash> {

@@ -160,6 +160,7 @@ impl Group {
         }
     }
 
+
     pub fn get_url(&self) -> String {
         let mut url = Url::parse(format!("{0}:?", PROTOCOL_SCHEME).as_str()).unwrap();
 
