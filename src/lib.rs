@@ -25,8 +25,10 @@ use serial_test::serial;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
     use anyhow::Result;
     use bytes::Bytes;
+    use common::init_veilid;
     use std::path::Path;
     use tmpdir::TmpDir;
     use tokio::fs;
@@ -51,14 +53,11 @@ mod tests {
         backend.start().await.expect("Unable to start");
 
         // Create a group and a repo
-        let group = backend
+        let mut group = backend
             .create_group()
             .await
             .expect("Unable to create group");
-        let repo = backend
-            .create_repo(&group.id())
-            .await
-            .expect("Unable to create repo");
+        let repo = group.create_repo().await.expect("Unable to create repo");
 
         let iroh_blobs = backend
             .get_iroh_blobs()
@@ -207,10 +206,7 @@ mod tests {
             .expect("Unable to create group");
 
         // Step 2: Create a repo
-        let repo = backend
-            .create_repo(&group.id())
-            .await
-            .expect("Unable to create repo");
+        let repo = group.create_repo().await.expect("Unable to create repo");
 
         let repo_key = repo.get_id();
         assert!(repo_key != CryptoKey::default(), "Repo ID should be set");
@@ -225,20 +221,13 @@ mod tests {
         let name = repo.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
 
         assert_eq!(name, repo_name);
-        // Step 4: Add repo to the group
-        group
-            .add_repo(repo.clone())
-            .expect("Unable to add repo to group");
 
         // Step 5: List known repos and verify the repo is in the list
         let repos = group.list_repos();
         assert!(repos.contains(&repo_key));
 
         // Step 6: Retrieve the repo by key and check its name
-        let loaded_repo = backend
-            .get_repo(TypedKey::new(CRYPTO_KIND_VLD0, repo_key.clone()))
-            .await
-            .expect("Repo not found");
+        let loaded_repo = group.get_repo(&repo_key).expect("Repo not found");
 
         let retrieved_name = loaded_repo
             .get_name()
@@ -268,14 +257,11 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(2)).await;
 
             // Create a group and a repo
-            let group = backend
+            let mut group = backend
                 .create_group()
                 .await
                 .expect("Unable to create group");
-            let repo = backend
-                .create_repo(&group.id())
-                .await
-                .expect("Unable to create repo");
+            let repo = group.create_repo().await.expect("Unable to create repo");
             let veilid_api = backend
                 .get_veilid_api()
                 .await
@@ -401,10 +387,7 @@ mod tests {
             .create_group()
             .await
             .expect("Failed to create group");
-        let repo = backend
-            .create_repo(&group.id())
-            .await
-            .expect("Failed to create repo");
+        let repo = group.create_repo().await.expect("Unable to create repo");
 
         let repo_name = "Test Repo";
         repo.set_name(repo_name)
@@ -430,8 +413,8 @@ mod tests {
             .get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id()))
             .await
             .expect(GROUP_NOT_FOUND);
-        let loaded_repo = backend
-            .get_repo(TypedKey::new(CRYPTO_KIND_VLD0, repo_id))
+        let loaded_repo = group
+            .load_repo_from_disk()
             .await
             .expect("Repo not found after restart");
 
@@ -471,7 +454,7 @@ mod tests {
         backend.start().await.expect("Unable to start");
 
         // Create a group
-        let group = backend
+        let mut group = backend
             .create_group()
             .await
             .expect("Unable to create group");
@@ -483,7 +466,7 @@ mod tests {
             .await
             .expect("Failed to write to temp file");
 
-        let repo = backend.create_repo(&group.id()).await?;
+        let repo = group.create_repo().await?;
 
         // Upload the file as a blob and get the hash
         let hash = repo
@@ -513,9 +496,9 @@ mod tests {
         }
 
         // Read back the file using the hash
-        let iroh_blobs = group
-            .iroh_blobs
-            .as_ref()
+        let iroh_blobs = backend
+            .get_iroh_blobs()
+            .await
             .expect("iroh_blobs not initialized");
         let receiver = iroh_blobs
             .read_file(hash.clone())
@@ -553,7 +536,7 @@ mod tests {
         backend.start().await.expect("Unable to start");
 
         // Create a group
-        let group = backend
+        let mut group = backend
             .create_group()
             .await
             .expect("Unable to create group");
@@ -567,7 +550,7 @@ mod tests {
 
         let protected_store = backend.get_protected_store().await.unwrap();
 
-        let repo = backend.create_repo(&group.id()).await?;
+        let repo = group.create_repo().await?;
 
         // Upload the file as a blob and get the hash
         let hash = repo
@@ -597,10 +580,11 @@ mod tests {
         }
 
         // Read back the file using the hash
-        let iroh_blobs = group
-            .iroh_blobs
-            .as_ref()
+        let iroh_blobs = backend
+            .get_iroh_blobs()
+            .await
             .expect("iroh_blobs not initialized");
+
         let receiver = iroh_blobs
             .read_file(hash.clone())
             .await
@@ -671,17 +655,11 @@ mod tests {
             .create_group()
             .await
             .expect("Unable to create group");
-        let repo1 = backend.create_repo(&group.id()).await?;
-        let repo2 = backend.create_repo(&group.id()).await?;
-
-        // Add repos to the group
-        group.add_repo(repo1.clone()).expect("Unable to add repo1");
-        group.add_repo(repo2.clone()).expect("Unable to add repo2");
+        let repo1 = group.create_repo().await?.clone();
 
         // List repos and verify
         let repos = group.list_repos();
         assert!(repos.contains(&repo1.get_id()));
-        assert!(repos.contains(&repo2.get_id()));
 
         backend.stop().await.expect("Unable to stop");
         Ok(())
@@ -705,16 +683,7 @@ mod tests {
             .create_group()
             .await
             .expect("Unable to create group");
-        let writable_repo = backend.create_repo(&group.id()).await?;
-        let read_only_repo = backend.create_repo(&group.id()).await?;
-
-        // Add repos to the group
-        group
-            .add_repo(writable_repo.clone())
-            .expect("Unable to add writable repo");
-        group
-            .add_repo(read_only_repo.clone())
-            .expect("Unable to add read-only repo");
+        let writable_repo = group.create_repo().await?.clone();
 
         // Verify own repo is found
         let own_repo = group.get_own_repo();
@@ -745,12 +714,7 @@ mod tests {
             .create_group()
             .await
             .expect("Unable to create group");
-        let mut peer_repo = backend.create_repo(&group.id()).await?;
-
-        // Add the peer repo to the group
-        group
-            .add_repo(peer_repo.clone())
-            .expect("Unable to add peer repo");
+        let mut peer_repo = group.create_repo().await?;
 
         // Upload a test blob to the peer repo
         let data_to_upload = Bytes::from("Test data for peer download");
@@ -802,30 +766,44 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn peers_have_hash_test() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend_peers_have_hash")
+        let base_dir: TmpDir = TmpDir::new("test_dweb_backend_peers_have_hash")
             .await
             .unwrap();
-        let port = 8080;
+        let store1 =
+            iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh1")).await?;
+        let store2 =
+            iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh2")).await?;
+        let (veilid_api, mut update_rx) = init_veilid(&base_dir.to_path_buf()).await?;
 
-        fs::create_dir_all(path.as_ref())
+        fs::create_dir_all(base_dir.as_ref())
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        let backend1 = Backend::from_dependencies(
+            &base_dir.to_path_buf(),
+            veilid_api.clone(),
+            update_rx.resubscribe(),
+            store1,
+        )
+        .await
+        .unwrap();
+
+        let backend2 = Backend::from_dependencies(
+            &base_dir.to_path_buf(),
+            veilid_api.clone(),
+            update_rx.resubscribe(),
+            store2,
+        )
+        .await
+        .unwrap();
 
         // Create a group and a peer repo
-        let mut group = backend
+        let mut group1 = backend1
             .create_group()
             .await
             .expect("Unable to create group");
 
-        let mut peer_repo = backend.create_repo(&group.id()).await?;
-
-        // Add the peer repo to the group
-        group
-            .add_repo(peer_repo.clone())
-            .expect("Unable to add peer repo");
+        let mut peer_repo = group1.create_repo().await?;
 
         // Upload a test blob to the peer repo
         let data_to_upload = Bytes::from("Test data for peer check");
@@ -841,7 +819,7 @@ mod tests {
         tx.send(Ok(data_to_upload.clone())).await.unwrap();
         drop(tx); // Close the sender
 
-        let iroh_blobs = backend
+        let iroh_blobs = backend1
             .get_iroh_blobs()
             .await
             .expect("iroh_blobs not initialized");
@@ -862,15 +840,24 @@ mod tests {
             !new_file_collection_hash.as_bytes().is_empty(),
             "New collection hash after uploading a file should not be empty"
         );
-        println!("Asking peers");
+
+        let joined_group = backend2
+            .join_from_url(&group1.get_url())
+            .await
+            .expect("Unable to join group on second peer");
+
         // Add delay to allow peers to propagate the hash
         sleep(Duration::from_secs(5)).await;
+        println!("Asking peers!");
 
         // Retry checking if peers have the hash
         let mut retries = 2;
         let mut peers_have = false;
         while retries > 0 {
-            peers_have = group.peers_have_hash(&file_hash).await.unwrap_or(false);
+            peers_have = joined_group
+                .peers_have_hash(&file_hash)
+                .await
+                .unwrap_or(false);
             if peers_have {
                 break;
             }
@@ -880,7 +867,7 @@ mod tests {
 
         assert!(peers_have, "Peers should have the uploaded hash");
 
-        backend.stop().await.expect("Unable to stop");
+        veilid_api.shutdown().await;
         Ok(())
     }
 
