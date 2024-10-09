@@ -184,28 +184,30 @@ impl Repo {
     }
 
     // Method to get or create a collection associated with the repo
-    async fn get_or_create_collection(&self) -> Result<Hash> {
-        // Try to get the collection hash from the DHT
-        if let Ok(collection_hash) = self.get_hash_from_dht().await {
-            // Try to retrieve the collection name from the hash
-            if let Ok(collection_name) = self.iroh_blobs.get_name_from_hash(&collection_hash).await {
-                // The collection exists, return the hash
-                return Ok(collection_hash);
-            } else {
-                // Log or handle the error where name retrieval from hash failed
-                eprintln!("Failed to get collection name from hash: {:?}", collection_hash);
-            }
-        } else {
-            println!("No collection hash found in DHT.");
-        }
-
-        // If we get here, the collection doesn't exist, so check write permissions
-        self.check_write_permissions()?;
-
-         // Get the name 
+async fn get_or_create_collection(&self) -> Result<Hash> {
+    // If the repo is writable, check if the collection exists
+    if self.can_write() {
         let collection_name = self.get_name().await?;
+        if let Ok(collection_hash) = self.iroh_blobs.collection_hash(&collection_name).await {
+            // Collection exists, return the hash
+            println!("Collection hash found in store: {:?}", collection_hash);
+            return Ok(collection_hash);
+        } else {
+            println!("Collection not found in store, checking DHT...");
+        }
+    }
 
-        // Create the collection
+    // Try to get the collection hash from the DHT (remote or unwritable repos)
+    if let Ok(collection_hash) = self.get_hash_from_dht().await {
+        // The collection hash is found, return it directly (no need for a name)
+        println!("Collection hash found in DHT: {:?}", collection_hash);
+        return Ok(collection_hash);
+    }
+
+    // If it's a writable repo and no collection exists, create a new collection
+    if self.can_write() {
+        // Create a new collection
+        let collection_name = self.get_name().await?;
         println!("Creating new collection...");
         let new_hash = match self.iroh_blobs.create_collection(&collection_name).await {
             Ok(hash) => {
@@ -228,8 +230,11 @@ impl Repo {
         }
 
         // Return the new collection hash
-        Ok(new_hash)
+        return Ok(new_hash);
     }
+    // Error if we're trying to create a collection in a read-only repo
+    Err(anyhow::Error::msg("Collection not found and cannot create in read-only repo"))
+}
 
     // Method to retrieve a file's hash from the collection
     pub async fn get_file_hash(&self, file_name: &str) -> Result<Hash> {
