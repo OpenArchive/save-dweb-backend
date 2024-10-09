@@ -61,17 +61,17 @@ impl BackendInner {
     }
 
     fn veilid(&self) -> Result<VeilidAPI> {
-        self.veilid_api
+        Ok(self.veilid_api
             .as_ref()
-            .ok_or_else(|| anyhow!("Veilid API not initialized"))
-            .map(|store| store.clone())
+            .ok_or_else(|| anyhow!("Veilid API not initialized"))?
+            .clone())
     }
 
     fn iroh_blobs(&self) -> Result<VeilidIrohBlobs> {
-        self.iroh_blobs
+        Ok(self.iroh_blobs
             .as_ref()
-            .ok_or_else(|| anyhow!("Veilid Iroh Blobs API not initialized"))
-            .map(|iroh_blobs| iroh_blobs.clone())
+            .ok_or_else(|| anyhow!("Veilid Iroh Blobs API not initialized"))?
+            .clone())
     }
 
     fn get_protected_store(&self) -> Result<ProtectedStore> {
@@ -127,7 +127,7 @@ impl Backend {
             tokio::spawn(async move {
                 let inner = inner.lock().await;
 
-                for group in inner.groups.clone().into_values().into_iter() {
+                for group in inner.groups.clone().into_values() {
                     if let Some(repo) = group.get_own_repo() {
                         if let Err(err) = repo.update_route_on_dht().await {
                             eprintln!(
@@ -196,7 +196,7 @@ impl Backend {
             tokio::spawn(async move {
                 let inner = inner.lock().await;
 
-                for group in inner.groups.clone().into_values().into_iter() {
+                for group in inner.groups.clone().into_values() {
                     if let Some(repo) = group.get_own_repo() {
                         if let Err(err) = repo.update_route_on_dht().await {
                             eprintln!(
@@ -338,7 +338,7 @@ impl Backend {
 
     pub async fn get_group(&self, record_key: &CryptoKey) -> Result<Box<Group>> {
         let mut inner = self.inner.lock().await;
-        if let Some(group) = inner.groups.get(&record_key) {
+        if let Some(group) = inner.groups.get(record_key) {
             return Ok(group.clone());
         }
         let iroh_blobs = inner.iroh_blobs()?;
@@ -348,7 +348,7 @@ impl Backend {
         let protected_store = veilid.protected_store().unwrap();
 
         // Load the keypair associated with the record_key from the protected store
-        let retrieved_keypair = CommonKeypair::load_keypair(&protected_store, &record_key)
+        let retrieved_keypair = CommonKeypair::load_keypair(&protected_store, record_key)
             .await
             .map_err(|_| anyhow!("Failed to load keypair"))?;
 

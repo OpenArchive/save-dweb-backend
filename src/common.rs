@@ -4,7 +4,7 @@
 use crate::constants::ROUTE_ID_DHT_KEY;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, path::Path, sync::Arc};
 use tokio::sync::broadcast::{self, Receiver};
 use veilid_core::{
     CryptoKey, CryptoSystem, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, KeyPair, Nonce,
@@ -33,7 +33,7 @@ pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
     Err(anyhow!("Unable to create route, reached max retries"))
 }
 
-pub async fn init_veilid(base_dir: &PathBuf) -> Result<(VeilidAPI, Receiver<VeilidUpdate>)> {
+pub async fn init_veilid(base_dir: &Path) -> Result<(VeilidAPI, Receiver<VeilidUpdate>)> {
     let config_inner = config_for_dir(base_dir.to_path_buf());
 
     let (tx, mut rx) = broadcast::channel(32);

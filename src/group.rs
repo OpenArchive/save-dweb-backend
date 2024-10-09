@@ -68,15 +68,15 @@ impl Group {
         self.dht_record.owner_secret().cloned()
     }
 
-    fn add_repo(&mut self, repo: Repo) -> Result<&Box<Repo>> {
+    fn add_repo(&mut self, repo: Repo) -> Result<&Repo, anyhow::Error> { 
         let id = repo.id();
         let repo = Box::new(repo);
         self.repos.insert(id, repo);
-        Ok(self.repos.get(&id).unwrap())
+        Ok(self.repos.get(&id).unwrap().as_ref())
     }
 
-    pub fn get_repo(&self, id: &CryptoKey) -> Result<&Box<Repo>> {
-        self.repos.get(id).ok_or_else(|| anyhow!("Repo not loaded"))
+    pub fn get_repo(&self, id: &CryptoKey) -> Result<&Repo> { 
+        self.repos.get(id).map(|repo| &**repo).ok_or_else(|| anyhow!("Repo not loaded"))
     }
 
     pub fn has_repo(&self, id: &CryptoKey) -> bool {
@@ -84,18 +84,19 @@ impl Group {
     }
 
     pub fn list_repos(&self) -> Vec<CryptoKey> {
-        self.repos.iter().map(|(_, repo)| repo.get_id()).collect()
+        self.repos.values().map(|repo| repo.get_id()).collect()
     }
 
-    pub fn get_own_repo(&self) -> Option<&Box<Repo>> {
-        self.repos.values().find(|repo| repo.can_write())
+    pub fn get_own_repo(&self) -> Option<&Repo> {
+        self.repos.values().find(|repo| repo.can_write()).map(|v| &**v)
     }
 
-    pub fn list_peer_repos(&self) -> Vec<&Box<Repo>> {
+    pub fn list_peer_repos(&self) -> Vec<&Repo> { 
         self.repos
             .values()
             .filter(|repo| !repo.can_write())
-            .collect()
+            .map(|v| &**v)  // Dereference the Box to get &Repo
+            .collect::<Vec<&Repo>>()
     }
 
     pub async fn download_hash_from_peers(&self, hash: &Hash) -> Result<()> {
@@ -220,7 +221,7 @@ impl Group {
         Ok(())
     }
 
-    pub async fn load_repo_from_network(&mut self, repo_id: TypedKey) -> Result<&Box<Repo>> {
+    pub async fn load_repo_from_network(&mut self, repo_id: TypedKey) -> Result<&Repo, anyhow::Error> {
         // TODO: Load keypair from DHT
         //        let protected_store = self.protected_store().unwrap();
         // Load keypair using the repo ID
@@ -280,7 +281,7 @@ impl Group {
         Ok(())
     }
 
-    pub async fn load_repo_from_disk(&mut self) -> Result<&Box<Repo>> {
+    pub async fn load_repo_from_disk(&mut self) -> Result<&Repo, anyhow::Error> {
         let protected_store = self.veilid.protected_store().unwrap();
 
         let mut group_repo_key = self.id().to_string();
@@ -316,7 +317,7 @@ impl Group {
         let repo = Repo {
             dht_record,
             encryption_key: self.encryption_key.clone(),
-            secret_key: secret_key,
+            secret_key,
             routing_context: self.routing_context.clone(),
             crypto_system: self.get_crypto_system(),
             iroh_blobs: self.iroh_blobs.clone(),
@@ -325,7 +326,7 @@ impl Group {
         self.add_repo(repo)
     }
 
-    pub async fn create_repo(&mut self) -> Result<&Box<Repo>> {
+    pub async fn create_repo(&mut self) -> Result<&Repo, anyhow::Error> {
         if self.get_own_repo().is_some() {
             return Err(anyhow!("Own repo already created for group"));
         }
@@ -379,7 +380,7 @@ impl Group {
             .await
             .map_err(|e| anyhow!("Unable to store repo id for group: {}", e))?;
 
-        Ok(self.add_repo(repo)?)
+        self.add_repo(repo)
     }
 
     async fn get_repo_keypair(&self, repo_id: TypedKey) -> Result<CommonKeypair> {
