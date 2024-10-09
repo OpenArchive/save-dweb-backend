@@ -263,13 +263,11 @@ impl Repo {
         // Ensure the collection exists before deleting a file
         let collection_hash = self.get_or_create_collection().await?;
 
-        // Get the collection name from the collection hash
-        let collection_name = self.iroh_blobs.get_name_from_hash(&collection_hash).await?;
-
         // Delete the file from the collection and get the new collection hash
         let deleted_hash = self.iroh_blobs.delete_file_from_collection_hash(&collection_hash, file_name).await?;
 
         // Persist the new collection hash with the name to the store
+        let collection_name = self.get_name().await?;
         self.iroh_blobs.persist_collection_with_name(&collection_name, &deleted_hash).await?;
 
         // Update the DHT with the new collection hash
