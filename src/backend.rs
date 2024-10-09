@@ -336,9 +336,9 @@ impl Backend {
         Ok(group)
     }
 
-    pub async fn get_group(&self, record_key: TypedKey) -> Result<Box<Group>> {
+    pub async fn get_group(&self, record_key: &CryptoKey) -> Result<Box<Group>> {
         let mut inner = self.inner.lock().await;
-        if let Some(group) = inner.groups.get(&record_key.value) {
+        if let Some(group) = inner.groups.get(&record_key) {
             return Ok(group.clone());
         }
         let iroh_blobs = inner.iroh_blobs()?;
@@ -348,29 +348,22 @@ impl Backend {
         let protected_store = veilid.protected_store().unwrap();
 
         // Load the keypair associated with the record_key from the protected store
-        let retrieved_keypair = CommonKeypair::load_keypair(&protected_store, &record_key.value)
+        let retrieved_keypair = CommonKeypair::load_keypair(&protected_store, &record_key)
             .await
             .map_err(|_| anyhow!("Failed to load keypair"))?;
 
         let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
 
-        // First open the DHT record
-        let dht_record = routing_context
-            .open_dht_record(record_key.clone(), None) // Don't pass a writer here yet
-            .await?;
-
         // Use the owner key from the DHT record as the default writer
-        let owner_key = dht_record.owner(); // Call the owner() method to get the owner key
+        let owner_key = retrieved_keypair.public_key; // Call the owner() method to get the owner key
+        let owner_secret = retrieved_keypair.secret_key;
+        let record_key = TypedKey::new(CRYPTO_KIND_VLD0, *record_key);
+
+        let owner = owner_secret.map(|secret| KeyPair::new(owner_key, secret));
 
         // Reopen the DHT record with the owner key as the writer
         let dht_record = routing_context
-            .open_dht_record(
-                record_key.clone(),
-                Some(KeyPair::new(
-                    owner_key.clone(),
-                    retrieved_keypair.secret_key.clone().unwrap(),
-                )),
-            )
+            .open_dht_record(record_key.clone(), owner)
             .await?;
 
         let group = Group::new(
@@ -396,7 +389,7 @@ impl Backend {
 
     pub async fn load_known_groups(self) -> Result<()> {
         for id in self.list_known_group_ids().await?.iter() {
-            self.get_group(TypedKey::new(CRYPTO_KIND_VLD0, *id)).await?;
+            self.get_group(id).await?;
         }
         Ok(())
     }

@@ -154,10 +154,7 @@ mod tests {
 
         backend.start().await.expect("Unable to restart");
 
-        let mut loaded_group = backend
-            .get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id()))
-            .await
-            .expect(GROUP_NOT_FOUND);
+        let mut loaded_group = backend.get_group(&group.id()).await.expect(GROUP_NOT_FOUND);
 
         let protected_store = backend.get_protected_store().await.unwrap();
         let keypair_data = protected_store
@@ -356,10 +353,7 @@ mod tests {
         backend.stop().await.expect("Unable to stop");
 
         backend.start().await.expect("Unable to restart");
-        let loaded_group = backend
-            .get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id()))
-            .await
-            .expect(GROUP_NOT_FOUND);
+        let loaded_group = backend.get_group(&group.id()).await.expect(GROUP_NOT_FOUND);
 
         let name = loaded_group
             .get_name()
@@ -409,10 +403,7 @@ mod tests {
             group.id()
         );
 
-        let loaded_group = backend
-            .get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id()))
-            .await
-            .expect(GROUP_NOT_FOUND);
+        let loaded_group = backend.get_group(&group.id()).await.expect(GROUP_NOT_FOUND);
         let loaded_repo = group
             .load_repo_from_disk()
             .await
