@@ -6,6 +6,7 @@ use futures_core::stream::Stream;
 use iroh_blobs::Hash;
 use serde::{Deserialize, Serialize};
 use serde_cbor::from_slice;
+use core::hash;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{io::ErrorKind, path::PathBuf};
@@ -172,20 +173,27 @@ impl Repo {
 
     // Method to get or create a collection associated with the repo
     async fn get_or_create_collection(&self) -> Result<Hash> {
-        // Get the collection name  
-        let collection_name = self.get_name().await?;
-        
-        // Try to retrieve the collection hash
-        if let Ok(collection_hash) = self.iroh_blobs.collection_hash(&collection_name).await {
-            // If the collection exists, return the hash
-            return Ok(collection_hash);
+        // Try to get the collection hash from the DHT
+        if let Ok(collection_hash) = self.get_hash_from_dht().await {
+            // Try to retrieve the collection name from the hash
+            if let Ok(collection_name) = self.iroh_blobs.get_name_from_hash(&collection_hash).await {
+                // The collection exists, return the hash
+                return Ok(collection_hash);
+            } else {
+                // Log or handle the error where name retrieval from hash failed
+                eprintln!("Failed to get collection name from hash: {:?}", collection_hash);
+            }
         }
 
         // If we get here, the collection doesn't exist, so check write permissions
         self.check_write_permissions()?;
 
-        // Create the collection if we have write permissions
+         // Get the name 
+        let collection_name = self.get_name().await?;
+
+        // Create the collection 
         let new_hash = self.iroh_blobs.create_collection(&collection_name).await?;
+        self.iroh_blobs.persist_collection_with_name(&collection_name, &new_hash).await?;
 
         // Update the DHT with the new collection hash
         self.update_collection_on_dht().await?;
@@ -199,32 +207,25 @@ impl Repo {
         // Ensure the collection exists before reading
         self.get_or_create_collection().await?;
 
-        let collection_name = self.get_name().await?;
-        self.iroh_blobs.get_file(&collection_name, file_name).await
+        let collection_hash = self.get_collection_hash().await?;
+        self.iroh_blobs.get_file_from_collection_hash(&collection_hash, file_name).await
     }
+
     pub async fn list_files(&self) -> Result<Vec<String>> {
-        if !self.can_write() {
-            // If the repo is read-only, fetch the list of files from the collection hash in the DHT
-            return self.list_files_from_collection_hash().await;
-        }
-        // Ensure the collection exists before listing files
-        self.get_or_create_collection().await?;
-                
-        self.list_files_in_repo_collection().await
-    }
-    // Method to list all files in the collection
-    async fn list_files_in_repo_collection(&self) -> Result<Vec<String>> {
-        let collection_name = self.get_name().await?;
+        let collection_hash = if !self.can_write() {
+            // Fetch the latest collection hash from the DHT if the repo is read-only
+            self.get_hash_from_dht().await?
+        } else {
+            // Ensure the collection exists and get the collection hash
+            self.get_or_create_collection().await?
+        };      
 
-        self.iroh_blobs.list_files(&collection_name).await
+        self.list_files_from_collection_hash(&collection_hash).await
     }
 
-    pub async fn list_files_from_collection_hash(&self) -> Result<Vec<String>> {
-        // Fetch the latest collection hash from the DHT
-        let collection_hash = self.get_hash_from_dht().await?;
-
+    pub async fn list_files_from_collection_hash(&self, collection_hash: &Hash) -> Result<Vec<String>> {
         // Use the method from VeilidIrohBlobs to list the files using the collection hash
-        let file_list = self.iroh_blobs.list_files_from_hash(&collection_hash).await?;
+        let file_list = self.iroh_blobs.list_files_from_hash(collection_hash).await?;
 
         Ok(file_list)
     }    
@@ -236,9 +237,15 @@ impl Repo {
         // Ensure the collection exists before deleting a file
         self.get_or_create_collection().await?;
 
-        let collection_name = self.get_name().await?;
+        let collection_hash = self.get_collection_hash().await?;
 
-        let deleted_hash = self.iroh_blobs.delete_file(&collection_name, file_name).await?;
+         // Get the collection name from the collection hash if needed
+        let collection_name = self.iroh_blobs.get_name_from_hash(&collection_hash).await?;
+
+        let deleted_hash = self.iroh_blobs.delete_file_from_collection_hash(&collection_hash, file_name).await?;
+
+        // Persist the new collection hash with the name to the store
+        self.iroh_blobs.persist_collection_with_name(&collection_name, &deleted_hash).await?;
 
         // Update the DHT with the new collection hash
         self.update_collection_on_dht().await?;
@@ -260,7 +267,10 @@ impl Repo {
         // Ensure the collection exists before uploading
         self.get_or_create_collection().await?;
 
-        let collection_name = self.get_name().await?;
+        let collection_hash = self.get_collection_hash().await?;
+
+        // Get the collection name from the collection hash if needed
+        let collection_name = self.iroh_blobs.get_name_from_hash(&collection_hash).await?;
 
         let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
         tx.send(Ok(Bytes::from(data_to_upload.clone()))).await.unwrap();
@@ -268,6 +278,9 @@ impl Repo {
 
         let file_hash = self.iroh_blobs.upload_to(&collection_name, file_name, rx).await?;
 
+        // Persist the new collection hash with the name to the store
+        self.iroh_blobs.persist_collection_with_name(&collection_name, &file_hash).await?;
+        
         // Update the collection hash on the DHT
         self.update_collection_on_dht().await?;
 
