@@ -219,9 +219,7 @@ impl Repo {
         };
 
         // Persist the collection with the name
-        if let Err(e) = self.iroh_blobs.persist_collection_with_name(&collection_name, &new_hash).await {
-            return Err(e);
-        }
+        self.iroh_blobs.persist_collection_with_name(&collection_name, &new_hash).await?;
 
         // Update the DHT with the new collection hash
         if let Err(e) = self.update_collection_on_dht().await {
@@ -244,11 +242,9 @@ impl Repo {
 
     pub async fn list_files(&self) -> Result<Vec<String>> {
         let collection_hash = if !self.can_write() {
-            let hash = self.get_hash_from_dht().await?;
-            hash
+            self.get_hash_from_dht().await?
         } else {
-            let hash = self.get_or_create_collection().await?;
-            hash
+            self.get_or_create_collection().await?
         };
     
         self.list_files_from_collection_hash(&collection_hash).await
