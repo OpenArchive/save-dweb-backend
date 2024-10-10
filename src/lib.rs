@@ -403,8 +403,8 @@ mod tests {
             group.id()
         );
 
-        let loaded_group = backend.get_group(&group.id()).await.expect(GROUP_NOT_FOUND);
-        let loaded_repo = group
+        let mut loaded_group = backend.get_group(&group.id()).await.expect(GROUP_NOT_FOUND);
+        let loaded_repo = loaded_group
             .load_repo_from_disk()
             .await
             .expect("Repo not found after restart");
