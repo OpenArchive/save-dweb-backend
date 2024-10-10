@@ -286,6 +286,7 @@ impl Backend {
             iroh_blobs.clone(),
         );
 
+        group.try_load_repo_from_disk().await;
         group.load_repos_from_dht().await?;
 
         inner.groups.insert(group.id(), Box::new(group.clone()));
@@ -301,7 +302,7 @@ impl Backend {
         let veilid = inner.veilid()?;
 
         let routing_context = veilid.routing_context()?;
-        let schema = DHTSchema::dflt(3)?;
+        let schema = DHTSchema::dflt(65)?; // 64 members + a title
         let kind = Some(CRYPTO_KIND_VLD0);
 
         let dht_record = routing_context.create_dht_record(schema, kind).await?;
@@ -366,18 +367,20 @@ impl Backend {
             .open_dht_record(record_key.clone(), owner)
             .await?;
 
-        let group = Group::new(
+        let mut group = Group::new(
             dht_record.clone(),
             retrieved_keypair.encryption_key.clone(),
             routing_context,
             veilid.clone(),
             iroh_blobs.clone(),
         );
+
+        group.try_load_repo_from_disk().await;
+        group.load_repos_from_dht().await?;
+
         inner.groups.insert(group.id(), Box::new(group.clone()));
 
         drop(inner);
-
-        let _ = self.join_group(retrieved_keypair).await;
 
         Ok(Box::new(group))
     }
