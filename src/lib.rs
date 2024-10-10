@@ -1041,15 +1041,15 @@ mod tests {
         fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
 
         // Initialize the backend
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Step 1: Create a group
         let mut group = backend.create_group().await.expect("Failed to create group");
 
         // Step 2: Create a repo and verify it can write (i.e., has a secret key)
-        let mut repo = backend
-            .create_repo(&group.id())
+        let mut repo = group
+            .create_repo()
             .await
             .expect("Failed to create repo");
 
@@ -1062,9 +1062,6 @@ mod tests {
             .await
             .expect("Unable to set repo name");
 
-        // Step 4: Add the repo to the group
-        group.add_repo(repo.clone()).expect("Failed to add repo to group");
-
          // Step 5: Upload a file, which implicitly creates the collection
         let file_name = "example.txt";
         let file_content = b"Test content for file upload";
@@ -1074,7 +1071,8 @@ mod tests {
         assert!(!file_hash.as_bytes().is_empty(), "File hash should not be empty after upload");
        
         // Step 6: Use iroh_blobs set_file to update the collection with the uploaded file
-        let iroh_blobs = backend.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
+        let blobs_future = backend.get_iroh_blobs().await;
+        let iroh_blobs = blobs_future.as_ref().expect("iroh_blobs not initialized");
         let collection_name = repo.get_name().await.expect("Failed to get repo name");
         let updated_collection_hash = repo.set_file_and_update_dht(&collection_name, file_name, &file_hash).await?;
         assert!(!updated_collection_hash.as_bytes().is_empty(), "Updated collection hash should not be empty after adding file");
@@ -1109,13 +1107,14 @@ mod tests {
         let port = 8080;
         fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Step 1: Create a group and a collection
         let group = backend.create_group().await.expect("Unable to create group");
         let collection_name = "hash_consistency_collection".to_string();
-        let iroh_blobs = backend.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
+        let blobs_future = backend.get_iroh_blobs().await;
+        let iroh_blobs = blobs_future.as_ref().expect("iroh_blobs not initialized");
 
         // Step 2: Create collection and get initial hash
         let initial_collection_hash = iroh_blobs.create_collection(&collection_name).await.expect("Failed to create collection");
