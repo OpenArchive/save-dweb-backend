@@ -1159,8 +1159,11 @@ mod tests {
             .await
             .expect("Unable to create group");
         let collection_name = "hash_consistency_collection".to_string();
-        let blobs_future = backend.get_iroh_blobs().await;
-        let iroh_blobs = blobs_future.as_ref().expect("iroh_blobs not initialized");
+
+        let iroh_blobs = backend
+            .get_iroh_blobs()
+            .await
+            .expect("iroh_blobs not initialized");
 
         // Step 2: Create collection and get initial hash
         let initial_collection_hash = iroh_blobs
