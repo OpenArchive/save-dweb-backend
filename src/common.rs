@@ -4,11 +4,12 @@
 use crate::constants::ROUTE_ID_DHT_KEY;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{path::Path, path::PathBuf, sync::Arc};
+use tokio::sync::broadcast::{self, Receiver};
 use veilid_core::{
     CryptoKey, CryptoSystem, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, KeyPair, Nonce,
-    ProtectedStore, RouteId, RoutingContext, Sequencing, SharedSecret, Stability, VeilidAPI,
-    CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
+    ProtectedStore, RouteId, RoutingContext, Sequencing, SharedSecret, Stability, UpdateCallback,
+    VeilidAPI, VeilidConfigInner, VeilidUpdate, CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
 };
 
 pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
@@ -30,6 +31,67 @@ pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
         }
     }
     Err(anyhow!("Unable to create route, reached max retries"))
+}
+
+pub async fn init_veilid(base_dir: &Path) -> Result<(VeilidAPI, Receiver<VeilidUpdate>)> {
+    let config_inner = config_for_dir(base_dir.to_path_buf());
+
+    let (tx, mut rx) = broadcast::channel(32);
+
+    let update_callback: UpdateCallback = Arc::new(move |update| {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if tx.send(update).is_err() {
+                // TODO:
+                //println!("receiver dropped");
+            }
+        });
+    });
+
+    // println!("Init veilid");
+    let veilid = veilid_core::api_startup_config(update_callback, config_inner).await?;
+
+    //println!("Attach veilid");
+
+    veilid.attach().await?;
+
+    //println!("Wait for veilid network");
+
+    while let Ok(update) = rx.recv().await {
+        if let VeilidUpdate::Attachment(attachment_state) = update {
+            if attachment_state.public_internet_ready && attachment_state.state.is_attached() {
+                println!("Public internet ready!");
+                break;
+            }
+        }
+    }
+
+    Ok((veilid, rx))
+}
+
+pub fn config_for_dir(base_dir: PathBuf) -> VeilidConfigInner {
+    return VeilidConfigInner {
+        program_name: "save-dweb-backend".to_string(),
+        namespace: "openarchive".into(),
+        protected_store: veilid_core::VeilidConfigProtectedStore {
+            // avoid prompting for password, don't do this in production
+            always_use_insecure_storage: true,
+            directory: base_dir
+                .join("protected_store")
+                .to_string_lossy()
+                .to_string(),
+            ..Default::default()
+        },
+        table_store: veilid_core::VeilidConfigTableStore {
+            directory: base_dir.join("table_store").to_string_lossy().to_string(),
+            ..Default::default()
+        },
+        block_store: veilid_core::VeilidConfigBlockStore {
+            directory: base_dir.join("block_store").to_string_lossy().to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 }
 
 #[derive(Serialize, Deserialize)]
@@ -66,7 +128,7 @@ impl CommonKeypair {
 pub trait DHTEntity {
     fn get_id(&self) -> CryptoKey;
     fn get_encryption_key(&self) -> SharedSecret;
-    fn get_routing_context(&self) -> Arc<RoutingContext>;
+    fn get_routing_context(&self) -> RoutingContext;
     fn get_crypto_system(&self) -> CryptoSystemVLD0;
     fn get_dht_record(&self) -> DHTRecordDescriptor;
     fn get_secret_key(&self) -> Option<CryptoKey>;

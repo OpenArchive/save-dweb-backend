@@ -1,20 +1,24 @@
-use crate::common::DHTEntity;
+use crate::common::CommonKeypair;
 use crate::repo::Repo;
+use crate::{common::DHTEntity, repo};
 use anyhow::{anyhow, Error, Result};
 use bytes::Bytes;
 use hex::ToHex;
+use iroh::net::key::SecretKey;
 use iroh_blobs::Hash;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use url::Url;
 use veilid_core::{
-    CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, ProtectedStore, RoutingContext,
-    SharedSecret, TypedKey,
+    CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, DHTReportScope, DHTSchema,
+    KeyPair, ProtectedStore, RoutingContext, SharedSecret, TypedKey, ValueSubkeyRangeSet,
+    VeilidAPI, CRYPTO_KEY_LENGTH, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 
@@ -28,26 +32,26 @@ pub const URL_SECRET_KEY: &str = "sk";
 pub struct Group {
     pub dht_record: DHTRecordDescriptor,
     pub encryption_key: SharedSecret,
-    pub routing_context: Arc<RoutingContext>,
-    pub crypto_system: CryptoSystemVLD0,
-    pub repos: Vec<Repo>,
-    pub iroh_blobs: Option<VeilidIrohBlobs>,
+    pub routing_context: RoutingContext,
+    pub repos: HashMap<CryptoKey, Box<Repo>>,
+    pub veilid: VeilidAPI,
+    pub iroh_blobs: VeilidIrohBlobs,
 }
 
 impl Group {
     pub fn new(
         dht_record: DHTRecordDescriptor,
         encryption_key: SharedSecret,
-        routing_context: Arc<RoutingContext>,
-        crypto_system: CryptoSystemVLD0,
-        iroh_blobs: Option<VeilidIrohBlobs>,
+        routing_context: RoutingContext,
+        veilid: VeilidAPI,
+        iroh_blobs: VeilidIrohBlobs,
     ) -> Self {
         Self {
             dht_record,
             encryption_key,
             routing_context,
-            crypto_system,
-            repos: Vec::new(),
+            repos: HashMap::new(),
+            veilid,
             iroh_blobs,
         }
     }
@@ -64,29 +68,37 @@ impl Group {
         self.dht_record.owner_secret().cloned()
     }
 
-    pub fn add_repo(&mut self, repo: Repo) -> Result<()> {
-        self.repos.push(repo);
-        Ok(())
+    fn add_repo(&mut self, repo: Repo) -> Result<&Box<Repo>> {
+        let id = repo.id();
+        let repo = Box::new(repo);
+        self.repos.insert(id, repo);
+        Ok(self.repos.get(&id).unwrap())
+    }
+
+    pub fn get_repo(&self, id: &CryptoKey) -> Result<&Box<Repo>> {
+        self.repos.get(id).ok_or_else(|| anyhow!("Repo not loaded"))
+    }
+
+    pub fn has_repo(&self, id: &CryptoKey) -> bool {
+        self.repos.contains_key(id)
     }
 
     pub fn list_repos(&self) -> Vec<CryptoKey> {
-        self.repos.iter().map(|repo| repo.get_id()).collect()
+        self.repos.values().map(|repo| repo.get_id()).collect()
     }
 
-    pub fn get_own_repo(&self) -> Option<&Repo> {
-        self.repos.iter().find(|repo| repo.can_write())
+    pub fn get_own_repo(&self) -> Option<&Box<Repo>> {
+        self.repos.values().find(|repo| repo.can_write())
     }
 
-    pub fn list_peer_repos(&self) -> Vec<&Repo> {
-        self.repos.iter().filter(|repo| !repo.can_write()).collect()
+    pub fn list_peer_repos(&self) -> Vec<&Box<Repo>> {
+        self.repos
+            .values()
+            .filter(|repo| !repo.can_write())
+            .collect()
     }
 
     pub async fn download_hash_from_peers(&self, hash: &Hash) -> Result<()> {
-        let iroh_blobs = match self.iroh_blobs.as_ref() {
-            Some(iroh_blobs) => iroh_blobs,
-            None => return Err(anyhow!("Iroh not initialized")),
-        };
-
         // Ask peers to download in random order
         let mut rng = thread_rng();
         let mut repos = self.list_peer_repos();
@@ -95,7 +107,12 @@ impl Group {
         for repo in repos.iter() {
             if let Ok(route_id_blob) = repo.get_route_id_blob().await {
                 // It's faster to try and fail, than to ask then try
-                if (iroh_blobs.download_file_from(route_id_blob, hash).await).is_ok() {
+                if (self
+                    .iroh_blobs
+                    .download_file_from(route_id_blob, hash)
+                    .await)
+                    .is_ok()
+                {
                     return Ok(());
                 }
             }
@@ -105,14 +122,10 @@ impl Group {
     }
 
     pub async fn peers_have_hash(&self, hash: &Hash) -> Result<bool> {
-        let iroh_blobs = match self.iroh_blobs.as_ref() {
-            Some(iroh_blobs) => iroh_blobs,
-            None => return Err(anyhow!("Iroh not initialized")),
-        };
-
         for repo in self.list_peer_repos().iter() {
+            println!("Askinng {} from {}", hash, repo.id());
             if let Ok(route_id_blob) = repo.get_route_id_blob().await {
-                if let Ok(has) = iroh_blobs.ask_hash(route_id_blob, *hash).await {
+                if let Ok(has) = self.iroh_blobs.ask_hash(route_id_blob, *hash).await {
                     if has {
                         return Ok(true);
                     }
@@ -124,12 +137,7 @@ impl Group {
     }
 
     pub async fn has_hash(&self, hash: &Hash) -> Result<bool> {
-        let iroh_blobs = match self.iroh_blobs.as_ref() {
-            Some(iroh_blobs) => iroh_blobs,
-            None => return Err(anyhow!("Iroh not initialized")),
-        };
-
-        let has = iroh_blobs.has_hash(hash).await;
+        let has = self.iroh_blobs.has_hash(hash).await;
 
         Ok(has)
     }
@@ -138,28 +146,22 @@ impl Group {
         &self,
         hash: &Hash,
     ) -> Result<mpsc::Receiver<std::io::Result<Bytes>>> {
-        let iroh_blobs = match self.iroh_blobs.as_ref() {
-            Some(iroh_blobs) => iroh_blobs,
-            None => return Err(anyhow!("Iroh not initialized")),
-        };
-
         if self.has_hash(hash).await? {
             self.download_hash_from_peers(hash).await?
         }
 
-        let receiver = iroh_blobs.read_file(*hash).await.unwrap();
+        let receiver = self.iroh_blobs.read_file(*hash).await.unwrap();
 
         Ok(receiver)
     }
 
     pub async fn get_repo_name(&self, repo_key: CryptoKey) -> Result<String> {
-        if let Some(repo) = self.repos.iter().find(|repo| repo.get_id() == repo_key) {
+        if let Some(repo) = self.repos.get(&repo_key) {
             repo.get_name().await
         } else {
             Err(anyhow!("Repo not found"))
         }
     }
-
 
     pub fn get_url(&self) -> String {
         let mut url = Url::parse(format!("{0}:?", PROTOCOL_SCHEME).as_str()).unwrap();
@@ -181,6 +183,244 @@ impl Group {
 
         url.to_string()
     }
+
+    async fn dht_repo_count(&self) -> Result<usize> {
+        let dht_record = &self.dht_record;
+        let range = ValueSubkeyRangeSet::full();
+        let scope = DHTReportScope::UpdateGet;
+
+        let record_key = dht_record.key().clone();
+
+        let report = self
+            .routing_context
+            .inspect_dht_record(record_key, range, scope)
+            .await?;
+
+        let size = report.network_seqs().len();
+
+        let mut count = 0;
+
+        while count < (size - 1) {
+            let value = self
+                .routing_context
+                .get_dht_value(record_key, count.try_into()?, false)
+                .await?;
+            if value.is_some() {
+                count += 1;
+            } else {
+                return Ok(count);
+            }
+        }
+
+        Ok(count)
+    }
+
+    pub async fn advertise_own_repo(&self) -> Result<()> {
+        let repo = self
+            .get_own_repo()
+            .ok_or_else(|| anyhow!("No own repo found for group"))?;
+
+        let repo_key = repo.id().to_vec();
+
+        let count = self.dht_repo_count().await? + 1;
+
+        println!("Advertising own repo {}", count);
+
+        self.routing_context
+            .set_dht_value(
+                self.dht_record.key().clone(),
+                count.try_into()?,
+                repo_key,
+                None,
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn load_repo_from_network(
+        &mut self,
+        repo_id: TypedKey,
+    ) -> Result<&Box<Repo>, anyhow::Error> {
+        // TODO: Load keypair from DHT
+        //        let protected_store = self.protected_store().unwrap();
+        // Load keypair using the repo ID
+        // let retrieved_keypair = CommonKeypair::load_keypair(&protected_store, &repo_id.value)
+        //    .await
+        //     .map_err(|_| anyhow!("Failed to load keypair for repo_id: {:?}", repo_id))?;
+        // Some(KeyPair::new(
+        //             owner_key.clone(),
+        //             retrieved_keypair.secret_key.clone().unwrap(),
+        //         ))
+        let keypair = None;
+
+        let dht_record = self
+            .routing_context
+            .open_dht_record(repo_id.clone(), keypair)
+            .await?;
+
+        let repo = Repo {
+            dht_record,
+            encryption_key: self.encryption_key.clone(),
+            secret_key: None,
+            routing_context: self.routing_context.clone(),
+            crypto_system: self.get_crypto_system(),
+            iroh_blobs: self.iroh_blobs.clone(),
+        };
+
+        self.add_repo(repo)
+    }
+
+    async fn load_repo_from_dht(&mut self, subkey: u32) -> Result<CryptoTyped<CryptoKey>> {
+        let repo_id_raw = self
+            .routing_context
+            .get_dht_value(self.dht_record.key().clone(), subkey, false)
+            .await?
+            .ok_or_else(|| anyhow!("Unable to load repo ID from DHT"))?;
+
+        let mut repo_id_buffer: [u8; CRYPTO_KEY_LENGTH] = [0; CRYPTO_KEY_LENGTH];
+
+        repo_id_buffer.copy_from_slice(repo_id_raw.data());
+
+        let repo_id = TypedKey::new(CRYPTO_KIND_VLD0, CryptoKey::from(repo_id_buffer));
+
+        self.load_repo_from_network(repo_id).await?;
+
+        Ok(repo_id)
+    }
+
+    pub async fn load_repos_from_dht(&mut self) -> Result<()> {
+        let count = self.dht_repo_count().await?;
+
+        let mut i = 1;
+        while i < count {
+            println!("Loading from DHT {}", i);
+            self.load_repo_from_dht(i.try_into()?).await?;
+            i += 1;
+        }
+
+        Ok(())
+    }
+
+    pub async fn try_load_repo_from_disk(&mut self) -> bool {
+        self.load_repo_from_disk().await.is_ok()
+    }
+
+    pub async fn load_repo_from_disk(&mut self) -> Result<&Box<Repo>> {
+        let protected_store = self.veilid.protected_store().unwrap();
+
+        let mut group_repo_key = self.id().to_string();
+        group_repo_key.push_str("-repo");
+
+        let key_bytes = protected_store
+            .load_user_secret(group_repo_key)
+            .await
+            .map_err(|err| anyhow!("Unable to load repo from disk"))?
+            .ok_or_else(|| anyhow!("No repo exists on disk for this group"))?;
+
+        let mut id_bytes: [u8; CRYPTO_KEY_LENGTH] = [0; CRYPTO_KEY_LENGTH];
+        id_bytes.copy_from_slice(&key_bytes);
+        let repo_id = TypedKey::new(CRYPTO_KIND_VLD0, CryptoKey::from(id_bytes));
+
+        let keypair = self.get_repo_keypair(repo_id).await?;
+
+        let dht_record = self
+            .routing_context
+            .open_dht_record(
+                repo_id.clone(),
+                Some(KeyPair::new(
+                    keypair.public_key.clone(),
+                    keypair.secret_key.clone().unwrap(),
+                )),
+            )
+            .await?;
+
+        let secret_key = keypair
+            .secret_key
+            .map(|key| TypedKey::new(CRYPTO_KIND_VLD0, key));
+
+        let repo = Repo {
+            dht_record,
+            encryption_key: self.encryption_key.clone(),
+            secret_key,
+            routing_context: self.routing_context.clone(),
+            crypto_system: self.get_crypto_system(),
+            iroh_blobs: self.iroh_blobs.clone(),
+        };
+
+        self.add_repo(repo)
+    }
+
+    pub async fn create_repo(&mut self) -> Result<&Box<Repo>, anyhow::Error> {
+        if self.get_own_repo().is_some() {
+            return Err(anyhow!("Own repo already created for group"));
+        }
+
+        // Create a new DHT record for the repo
+        let schema = DHTSchema::dflt(3)?;
+        let kind = Some(CRYPTO_KIND_VLD0);
+        let repo_dht_record = self.routing_context.create_dht_record(schema, kind).await?;
+
+        // Identify the repo with the DHT record's key
+        let repo_id = repo_dht_record.key().clone();
+
+        // Use the group's encryption key for the repo
+        let encryption_key = self.get_encryption_key().clone();
+
+        // Wrap the secret key in CryptoTyped for storage
+        let secret_key_typed =
+            CryptoTyped::new(CRYPTO_KIND_VLD0, self.get_secret_key().unwrap().clone());
+
+        let repo = Repo::new(
+            repo_dht_record.clone(),
+            encryption_key,
+            Some(secret_key_typed),
+            self.routing_context.clone(),
+            self.get_crypto_system(),
+            self.iroh_blobs.clone(),
+        );
+
+        // This should happen every time the route ID changes
+        repo.update_route_on_dht().await?;
+
+        let protected_store = self.veilid.protected_store().unwrap();
+
+        let keypair = CommonKeypair {
+            id: repo.id(),
+            public_key: repo_dht_record.owner().clone(),
+            secret_key: self.get_secret_key(),
+            encryption_key: encryption_key.clone(),
+        };
+
+        keypair
+            .store_keypair(&protected_store)
+            .await
+            .map_err(|e| anyhow!(e))?;
+
+        let mut group_repo_key = self.id().to_string();
+        group_repo_key.push_str("-repo");
+        let key_bytes = *repo.id();
+        protected_store
+            .save_user_secret(group_repo_key, key_bytes.as_slice())
+            .await
+            .map_err(|e| anyhow!("Unable to store repo id for group: {}", e))?;
+
+        self.add_repo(repo)?;
+
+        self.advertise_own_repo().await?;
+
+        self.get_own_repo()
+            .ok_or_else(|| anyhow!("Unexpected error, created repo not persisted"))
+    }
+
+    async fn get_repo_keypair(&self, repo_id: TypedKey) -> Result<CommonKeypair> {
+        let protected_store = self.veilid.protected_store()?;
+
+        // Load keypair using the repo ID
+        CommonKeypair::load_keypair(&protected_store, &repo_id.value)
+            .await
+            .map_err(|_| anyhow!("Failed to load keypair for repo_id: {:?}", repo_id))
+    }
 }
 
 impl DHTEntity for Group {
@@ -192,12 +432,13 @@ impl DHTEntity for Group {
         self.encryption_key.clone()
     }
 
-    fn get_routing_context(&self) -> Arc<RoutingContext> {
+    fn get_routing_context(&self) -> RoutingContext {
         self.routing_context.clone()
     }
 
     fn get_crypto_system(&self) -> CryptoSystemVLD0 {
-        self.crypto_system.clone()
+        // TODO handle the error?
+        CryptoSystemVLD0::new(self.veilid.crypto().unwrap())
     }
 
     fn get_dht_record(&self) -> DHTRecordDescriptor {
