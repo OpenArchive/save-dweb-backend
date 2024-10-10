@@ -556,7 +556,7 @@ mod tests {
             .expect("veilid_api not initialized")
             .routing_context()
             .expect("Failed to get routing context")
-            .get_dht_value(group.dht_record.key().clone(), 1, false)
+            .get_dht_value(repo.dht_record.key().clone(), 1, false)
             .await
             .expect("Failed to retrieve DHT value");
 
