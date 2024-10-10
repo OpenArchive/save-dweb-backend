@@ -409,8 +409,7 @@ mod tests {
 
         let mut loaded_group = backend.get_group(&group_id).await.expect(GROUP_NOT_FOUND);
         let loaded_repo = loaded_group
-            .load_repo_from_disk()
-            .await
+            .get_own_repo()
             .expect("Repo not found after restart");
 
         let retrieved_name = loaded_repo
