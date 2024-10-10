@@ -432,7 +432,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn upload_blob() -> Result<()> {
+    async fn upload_blob_test() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend_upload_blob").await.unwrap();
         let port = 8081;
 
@@ -472,7 +472,7 @@ mod tests {
             .expect("veilid_api not initialized")
             .routing_context()
             .expect("Failed to get routing context")
-            .get_dht_value(group.dht_record.key().clone(), 1, false)
+            .get_dht_value(repo.dht_record.key().clone(), 1, false)
             .await
             .expect("Failed to retrieve DHT value");
 
