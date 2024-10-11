@@ -33,8 +33,11 @@ pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
     Err(anyhow!("Unable to create route, reached max retries"))
 }
 
-pub async fn init_veilid(base_dir: &Path) -> Result<(VeilidAPI, Receiver<VeilidUpdate>)> {
-    let config_inner = config_for_dir(base_dir.to_path_buf());
+pub async fn init_veilid(
+    base_dir: &Path,
+    namespace: String,
+) -> Result<(VeilidAPI, Receiver<VeilidUpdate>)> {
+    let config_inner = config_for_dir(base_dir.to_path_buf(), namespace);
 
     let (tx, mut rx) = broadcast::channel(32);
 
@@ -69,10 +72,10 @@ pub async fn init_veilid(base_dir: &Path) -> Result<(VeilidAPI, Receiver<VeilidU
     Ok((veilid, rx))
 }
 
-pub fn config_for_dir(base_dir: PathBuf) -> VeilidConfigInner {
+pub fn config_for_dir(base_dir: PathBuf, namespace: String) -> VeilidConfigInner {
     return VeilidConfigInner {
         program_name: "save-dweb-backend".to_string(),
-        namespace: "openarchive".into(),
+        namespace,
         protected_store: veilid_core::VeilidConfigProtectedStore {
             // avoid prompting for password, don't do this in production
             always_use_insecure_storage: true,

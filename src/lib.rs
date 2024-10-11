@@ -42,7 +42,6 @@ mod tests {
     #[serial]
     async fn blob_transfer() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
-        let port = 8080;
 
         fs::create_dir_all(path.as_ref())
             .await
@@ -108,7 +107,6 @@ mod tests {
     #[serial]
     async fn group_creation() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
-        let port = 8080;
 
         fs::create_dir_all(path.as_ref())
             .await
@@ -137,7 +135,6 @@ mod tests {
     #[serial]
     async fn keypair_storage_and_retrieval() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
-        let port = 8080;
 
         fs::create_dir_all(path.as_ref())
             .await
@@ -187,7 +184,6 @@ mod tests {
     #[serial]
     async fn repo_creation() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
-        let port = 8080;
 
         fs::create_dir_all(path.as_ref())
             .await
@@ -241,7 +237,6 @@ mod tests {
     async fn sending_message_via_private_route() -> Result<()> {
         tokio::time::timeout(Duration::from_secs(888), async {
             let path = TmpDir::new("test_dweb_backend").await.unwrap();
-            let port = 8080;
 
             fs::create_dir_all(path.as_ref())
                 .await
@@ -332,7 +327,6 @@ mod tests {
     #[serial]
     async fn group_name_persistence() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
-        let port = 8080;
 
         fs::create_dir_all(path.as_ref())
             .await
@@ -368,7 +362,6 @@ mod tests {
     #[serial]
     async fn repo_persistence() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
-        let port = 8080;
 
         fs::create_dir_all(path.as_ref())
             .await
@@ -437,7 +430,6 @@ mod tests {
     #[serial]
     async fn upload_blob_test() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend_upload_blob").await.unwrap();
-        let port = 8081;
 
         fs::create_dir_all(path.as_ref())
             .await
@@ -519,7 +511,6 @@ mod tests {
     #[serial]
     async fn upload_blob_and_verify_protected_store() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend_upload_blob").await.unwrap();
-        let port = 8081;
 
         fs::create_dir_all(path.as_ref())
             .await
@@ -605,7 +596,6 @@ mod tests {
     #[serial]
     async fn test_join() {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
-        let port = 8080;
 
         fs::create_dir_all(path.as_ref())
             .await
@@ -636,7 +626,6 @@ mod tests {
     #[serial]
     async fn list_repos_test() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend_list_repos").await.unwrap();
-        let port = 8080;
 
         fs::create_dir_all(path.as_ref())
             .await
@@ -664,7 +653,6 @@ mod tests {
     #[serial]
     async fn get_own_repo_test() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend_get_own_repo").await.unwrap();
-        let port = 8080;
 
         fs::create_dir_all(path.as_ref())
             .await
@@ -692,20 +680,43 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn download_hash_from_peers_test() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend_download_hash")
+        let base_dir = TmpDir::new("test_dweb_backend_download_hash")
             .await
             .unwrap();
-        let port = 8080;
 
-        fs::create_dir_all(path.as_ref())
+        let store1 =
+            iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh1")).await?;
+        let store2 =
+            iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh2")).await?;
+        let (veilid_api1, mut update_rx1) =
+            init_veilid(&base_dir.to_path_buf(), "downloadpeers1".to_string()).await?;
+        let (veilid_api2, mut update_rx2) =
+            init_veilid(&base_dir.to_path_buf(), "downloadpeers2".to_string()).await?;
+
+        fs::create_dir_all(base_dir.as_ref())
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        let backend1 = Backend::from_dependencies(
+            &base_dir.to_path_buf(),
+            veilid_api1.clone(),
+            update_rx1,
+            store1,
+        )
+        .await
+        .unwrap();
+
+        let backend2 = Backend::from_dependencies(
+            &base_dir.to_path_buf(),
+            veilid_api2.clone(),
+            update_rx2,
+            store2,
+        )
+        .await
+        .unwrap();
 
         // Create a group and a peer repo
-        let mut group = backend
+        let mut group = backend1
             .create_group()
             .await
             .expect("Unable to create group");
@@ -744,17 +755,20 @@ mod tests {
             "New collection hash after uploading a file should not be empty"
         );
 
+        println!("Original group {}", group.dht_record.key());
+
+        let group2 = backend2.join_from_url(&group.get_url()).await?;
+
         // Add delay to allow peers to propagate the hash
-        sleep(Duration::from_secs(3)).await;
+        sleep(Duration::from_secs(1)).await;
+
+        println!("Asking peers");
 
         // Download hash from peers
-        if let Err(e) = group.download_hash_from_peers(&file_hash).await {
-            eprintln!("Unable to download hash from peers: {:?}", e);
-            backend.stop().await.expect("Unable to stop");
-            return Err(e);
-        }
+        group2.download_hash_from_peers(&file_hash).await?;
 
-        backend.stop().await.expect("Unable to stop");
+        backend1.stop().await?;
+        backend2.stop().await?;
         Ok(())
     }
 
@@ -764,11 +778,16 @@ mod tests {
         let base_dir: TmpDir = TmpDir::new("test_dweb_backend_peers_have_hash")
             .await
             .unwrap();
+
         let store1 =
             iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh1")).await?;
         let store2 =
             iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh2")).await?;
-        let (veilid_api, mut update_rx) = init_veilid(&base_dir.to_path_buf()).await?;
+
+        let (veilid_api1, mut update_rx1) =
+            init_veilid(&base_dir.to_path_buf(), "downloadpeers1".to_string()).await?;
+        let (veilid_api2, mut update_rx2) =
+            init_veilid(&base_dir.to_path_buf(), "downloadpeers2".to_string()).await?;
 
         fs::create_dir_all(base_dir.as_ref())
             .await
@@ -776,8 +795,8 @@ mod tests {
 
         let backend1 = Backend::from_dependencies(
             &base_dir.to_path_buf(),
-            veilid_api.clone(),
-            update_rx.resubscribe(),
+            veilid_api1.clone(),
+            update_rx1,
             store1,
         )
         .await
@@ -785,8 +804,8 @@ mod tests {
 
         let backend2 = Backend::from_dependencies(
             &base_dir.to_path_buf(),
-            veilid_api.clone(),
-            update_rx.resubscribe(),
+            veilid_api2.clone(),
+            update_rx2,
             store2,
         )
         .await
@@ -867,7 +886,8 @@ mod tests {
 
         assert!(peers_have, "Peers should have the uploaded hash");
 
-        veilid_api.shutdown().await;
+        veilid_api1.shutdown().await;
+        veilid_api2.shutdown().await;
         Ok(())
     }
 
@@ -876,7 +896,6 @@ mod tests {
     async fn test_create_collection_and_upload_file_via_backend() -> Result<()> {
         // Setup temporary directory for backend and veilid blobs
         let path = TmpDir::new("test_backend_create_collection").await.unwrap();
-        let port = 8080;
         fs::create_dir_all(path.as_ref())
             .await
             .expect("Failed to create base directory");
@@ -957,7 +976,6 @@ mod tests {
     async fn test_delete_file_from_collection_via_backend() -> Result<()> {
         // Setup temporary directory for backend and veilid blobs
         let path = TmpDir::new("test_backend_delete_file").await.unwrap();
-        let port = 8080;
         fs::create_dir_all(path.as_ref())
             .await
             .expect("Failed to create base directory");
