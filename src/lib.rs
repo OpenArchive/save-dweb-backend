@@ -25,16 +25,18 @@ use serial_test::serial;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
     use anyhow::Result;
     use bytes::Bytes;
+    use common::init_veilid;
     use std::path::Path;
     use tmpdir::TmpDir;
     use tokio::fs;
     use tokio::sync::mpsc;
+    use tokio::time::sleep;
     use tokio::time::Duration;
     use tokio_stream::wrappers::ReceiverStream;
     use tokio_stream::StreamExt;
-    use tokio::time::sleep;
 
     #[tokio::test]
     #[serial]
@@ -47,22 +49,19 @@ mod tests {
             .expect("Failed to create base directory");
 
         // Initialize the backend
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group and a repo
-        let group = backend
+        let mut group = backend
             .create_group()
             .await
             .expect("Unable to create group");
-        let repo = backend
-            .create_repo(&group.id())
-            .await
-            .expect("Unable to create repo");
+        let repo = group.create_repo().await.expect("Unable to create repo");
 
         let iroh_blobs = backend
-            .iroh_blobs
-            .as_ref()
+            .get_iroh_blobs()
+            .await
             .expect("iroh_blobs not initialized");
 
         // Prepare data to upload as a blob
@@ -115,7 +114,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         let group = backend
@@ -144,7 +143,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         let group = backend
@@ -155,12 +154,9 @@ mod tests {
 
         backend.start().await.expect("Unable to restart");
 
-        let mut loaded_group = backend
-            .get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id()))
-            .await
-            .expect(GROUP_NOT_FOUND);
+        let mut loaded_group = backend.get_group(&group.id()).await.expect(GROUP_NOT_FOUND);
 
-        let protected_store = backend.get_protected_store().unwrap();
+        let protected_store = backend.get_protected_store().await.unwrap();
         let keypair_data = protected_store
             .load_user_secret(group.id().to_string())
             .await
@@ -197,7 +193,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Step 1: Create a group before creating a repo
@@ -207,10 +203,7 @@ mod tests {
             .expect("Unable to create group");
 
         // Step 2: Create a repo
-        let repo = backend
-            .create_repo(&group.id())
-            .await
-            .expect("Unable to create repo");
+        let repo = group.create_repo().await.expect("Unable to create repo");
 
         let repo_key = repo.get_id();
         assert!(repo_key != CryptoKey::default(), "Repo ID should be set");
@@ -225,20 +218,13 @@ mod tests {
         let name = repo.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
 
         assert_eq!(name, repo_name);
-        // Step 4: Add repo to the group
-        group
-            .add_repo(repo.clone())
-            .expect("Unable to add repo to group");
 
         // Step 5: List known repos and verify the repo is in the list
         let repos = group.list_repos();
         assert!(repos.contains(&repo_key));
 
         // Step 6: Retrieve the repo by key and check its name
-        let loaded_repo = backend
-            .get_repo(TypedKey::new(CRYPTO_KIND_VLD0, repo_key.clone()))
-            .await
-            .expect("Repo not found");
+        let loaded_repo = group.get_repo(&repo_key).expect("Repo not found");
 
         let retrieved_name = loaded_repo
             .get_name()
@@ -261,28 +247,27 @@ mod tests {
                 .await
                 .expect("Failed to create base directory");
 
-            let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+            let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
             backend.start().await.expect("Unable to start");
 
             // Add delay to ensure backend initialization
             tokio::time::sleep(Duration::from_secs(2)).await;
 
             // Create a group and a repo
-            let group = backend
+            let mut group = backend
                 .create_group()
                 .await
                 .expect("Unable to create group");
-            let repo = backend
-                .create_repo(&group.id())
-                .await
-                .expect("Unable to create repo");
+            let repo = group.create_repo().await.expect("Unable to create repo");
             let veilid_api = backend
                 .get_veilid_api()
+                .await
                 .expect("Failed to get VeilidAPI instance");
 
             // Get the update receiver from the backend
             let update_rx = backend
                 .subscribe_updates()
+                .await
                 .expect("Failed to subscribe to updates");
 
             // Set up a channel to receive AppMessage updates
@@ -325,7 +310,7 @@ mod tests {
             println!("Sending message to owner...");
 
             // Send the message
-            repo.send_message_to_owner(veilid_api, message.clone(), ROUTE_ID_DHT_KEY)
+            repo.send_message_to_owner(&veilid_api, message.clone(), ROUTE_ID_DHT_KEY)
                 .await
                 .expect("Failed to send message to repo owner");
 
@@ -353,7 +338,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         let group = backend
@@ -368,10 +353,7 @@ mod tests {
         backend.stop().await.expect("Unable to stop");
 
         backend.start().await.expect("Unable to restart");
-        let loaded_group = backend
-            .get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id()))
-            .await
-            .expect(GROUP_NOT_FOUND);
+        let loaded_group = backend.get_group(&group.id()).await.expect(GROUP_NOT_FOUND);
 
         let name = loaded_group
             .get_name()
@@ -392,17 +374,16 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start backend");
 
         let mut group = backend
             .create_group()
             .await
             .expect("Failed to create group");
-        let repo = backend
-            .create_repo(&group.id())
-            .await
-            .expect("Failed to create repo");
+        let group_id = group.id();
+
+        let repo = group.create_repo().await.expect("Unable to create repo");
 
         let repo_name = "Test Repo";
         repo.set_name(repo_name)
@@ -415,22 +396,20 @@ mod tests {
         let repo_id = repo.id();
         println!("lib: Repo created with id: {:?}", repo_id);
 
+        drop(group);
+
         backend.stop().await.expect("Unable to stop backend");
 
         backend.start().await.expect("Unable to restart backend");
 
         println!(
             "Backend restarted, attempting to load group with ID: {:?}",
-            group.id()
+            group_id
         );
 
-        let loaded_group = backend
-            .get_group(TypedKey::new(CRYPTO_KIND_VLD0, group.id()))
-            .await
-            .expect(GROUP_NOT_FOUND);
-        let loaded_repo = backend
-            .get_repo(TypedKey::new(CRYPTO_KIND_VLD0, repo_id))
-            .await
+        let mut loaded_group = backend.get_group(&group_id).await.expect(GROUP_NOT_FOUND);
+        let loaded_repo = loaded_group
+            .get_own_repo()
             .expect("Repo not found after restart");
 
         let retrieved_name = loaded_repo
@@ -456,7 +435,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn upload_blob() -> Result<()> {
+    async fn upload_blob_test() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend_upload_blob").await.unwrap();
         let port = 8081;
 
@@ -465,11 +444,11 @@ mod tests {
             .expect("Failed to create base directory");
 
         // Initialize the backend
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group
-        let group = backend
+        let mut group = backend
             .create_group()
             .await
             .expect("Unable to create group");
@@ -481,7 +460,7 @@ mod tests {
             .await
             .expect("Failed to write to temp file");
 
-        let repo = backend.create_repo(&group.id()).await?;
+        let repo = group.create_repo().await?;
 
         // Upload the file as a blob and get the hash
         let hash = repo
@@ -492,10 +471,11 @@ mod tests {
         // Verify that the file was uploaded and the hash was written to the DHT
         let dht_value = backend
             .get_veilid_api()
+            .await
             .expect("veilid_api not initialized")
             .routing_context()
             .expect("Failed to get routing context")
-            .get_dht_value(group.dht_record.key().clone(), 1, false)
+            .get_dht_value(repo.dht_record.key().clone(), 1, false)
             .await
             .expect("Failed to retrieve DHT value");
 
@@ -510,9 +490,9 @@ mod tests {
         }
 
         // Read back the file using the hash
-        let iroh_blobs = group
-            .iroh_blobs
-            .as_ref()
+        let iroh_blobs = backend
+            .get_iroh_blobs()
+            .await
             .expect("iroh_blobs not initialized");
         let receiver = iroh_blobs
             .read_file(hash.clone())
@@ -546,11 +526,11 @@ mod tests {
             .expect("Failed to create base directory");
 
         // Initialize the backend
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group
-        let group = backend
+        let mut group = backend
             .create_group()
             .await
             .expect("Unable to create group");
@@ -562,9 +542,9 @@ mod tests {
             .await
             .expect("Failed to write to temp file");
 
-        let protected_store = backend.get_protected_store().unwrap();
+        let protected_store = backend.get_protected_store().await.unwrap();
 
-        let repo = backend.create_repo(&group.id()).await?;
+        let repo = group.create_repo().await?;
 
         // Upload the file as a blob and get the hash
         let hash = repo
@@ -575,10 +555,11 @@ mod tests {
         // Verify that the file was uploaded and the hash was written to the DHT
         let dht_value = backend
             .get_veilid_api()
+            .await
             .expect("veilid_api not initialized")
             .routing_context()
             .expect("Failed to get routing context")
-            .get_dht_value(group.dht_record.key().clone(), 1, false)
+            .get_dht_value(repo.dht_record.key().clone(), 1, false)
             .await
             .expect("Failed to retrieve DHT value");
 
@@ -593,10 +574,11 @@ mod tests {
         }
 
         // Read back the file using the hash
-        let iroh_blobs = group
-            .iroh_blobs
-            .as_ref()
+        let iroh_blobs = backend
+            .get_iroh_blobs()
+            .await
             .expect("iroh_blobs not initialized");
+
         let receiver = iroh_blobs
             .read_file(hash.clone())
             .await
@@ -629,7 +611,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
 
         backend.start().await.expect("Unable to start");
         let group = backend
@@ -649,6 +631,7 @@ mod tests {
         assert_eq!(keys.id, group.id());
         backend.stop().await.expect("Unable to stop");
     }
+
     #[tokio::test]
     #[serial]
     async fn list_repos_test() -> Result<()> {
@@ -657,10 +640,9 @@ mod tests {
 
         fs::create_dir_all(path.as_ref())
             .await
-
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group and two repos
@@ -668,17 +650,11 @@ mod tests {
             .create_group()
             .await
             .expect("Unable to create group");
-        let repo1 = backend.create_repo(&group.id()).await?;
-        let repo2 = backend.create_repo(&group.id()).await?;
-
-        // Add repos to the group
-        group.add_repo(repo1.clone()).expect("Unable to add repo1");
-        group.add_repo(repo2.clone()).expect("Unable to add repo2");
+        let repo1 = group.create_repo().await?.clone();
 
         // List repos and verify
         let repos = group.list_repos();
         assert!(repos.contains(&repo1.get_id()));
-        assert!(repos.contains(&repo2.get_id()));
 
         backend.stop().await.expect("Unable to stop");
         Ok(())
@@ -694,7 +670,7 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group and two repos, one writable
@@ -702,12 +678,7 @@ mod tests {
             .create_group()
             .await
             .expect("Unable to create group");
-        let writable_repo = backend.create_repo(&group.id()).await?;
-        let read_only_repo = backend.create_repo(&group.id()).await?;
-
-        // Add repos to the group
-        group.add_repo(writable_repo.clone()).expect("Unable to add writable repo");
-        group.add_repo(read_only_repo.clone()).expect("Unable to add read-only repo");
+        let writable_repo = group.create_repo().await?.clone();
 
         // Verify own repo is found
         let own_repo = group.get_own_repo();
@@ -721,14 +692,16 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn download_hash_from_peers_test() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend_download_hash").await.unwrap();
+        let path = TmpDir::new("test_dweb_backend_download_hash")
+            .await
+            .unwrap();
         let port = 8080;
 
         fs::create_dir_all(path.as_ref())
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Create a group and a peer repo
@@ -736,15 +709,16 @@ mod tests {
             .create_group()
             .await
             .expect("Unable to create group");
-        let mut peer_repo = backend.create_repo(&group.id()).await?;
-
-        // Add the peer repo to the group
-        group.add_repo(peer_repo.clone()).expect("Unable to add peer repo");
+        let mut peer_repo = group.create_repo().await?;
 
         // Upload a test blob to the peer repo
         let data_to_upload = Bytes::from("Test data for peer download");
         let collection_name = "peer_repo_collection".to_string();
-        peer_repo.iroh_blobs.create_collection(&collection_name).await.expect("Unable to create collection");
+        peer_repo
+            .iroh_blobs
+            .create_collection(&collection_name)
+            .await
+            .expect("Unable to create collection");
 
         // Create a file stream using mpsc
         let (tx, rx) = mpsc::channel(1);
@@ -765,7 +739,10 @@ mod tests {
             .set_file(&collection_name, &file_path, &file_hash)
             .await
             .expect("Unable to add file to collection");
-        assert!(!new_file_collection_hash.as_bytes().is_empty(), "New collection hash after uploading a file should not be empty");
+        assert!(
+            !new_file_collection_hash.as_bytes().is_empty(),
+            "New collection hash after uploading a file should not be empty"
+        );
 
         // Add delay to allow peers to propagate the hash
         sleep(Duration::from_secs(3)).await;
@@ -784,39 +761,62 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn peers_have_hash_test() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend_peers_have_hash").await.unwrap();
-        let port = 8080;
+        let base_dir: TmpDir = TmpDir::new("test_dweb_backend_peers_have_hash")
+            .await
+            .unwrap();
+        let store1 =
+            iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh1")).await?;
+        let store2 =
+            iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh2")).await?;
+        let (veilid_api, mut update_rx) = init_veilid(&base_dir.to_path_buf()).await?;
 
-        fs::create_dir_all(path.as_ref())
+        fs::create_dir_all(base_dir.as_ref())
             .await
             .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        let backend1 = Backend::from_dependencies(
+            &base_dir.to_path_buf(),
+            veilid_api.clone(),
+            update_rx.resubscribe(),
+            store1,
+        )
+        .await
+        .unwrap();
+
+        let backend2 = Backend::from_dependencies(
+            &base_dir.to_path_buf(),
+            veilid_api.clone(),
+            update_rx.resubscribe(),
+            store2,
+        )
+        .await
+        .unwrap();
 
         // Create a group and a peer repo
-        let mut group = backend
+        let mut group1 = backend1
             .create_group()
             .await
             .expect("Unable to create group");
-        let mut peer_repo = backend.create_repo(&group.id()).await?;
 
-        // Add the peer repo to the group
-        group.add_repo(peer_repo.clone()).expect("Unable to add peer repo");
+        let mut peer_repo = group1.create_repo().await?;
 
         // Upload a test blob to the peer repo
         let data_to_upload = Bytes::from("Test data for peer check");
         let collection_name = "peer_repo_collection_check".to_string();
-        peer_repo.iroh_blobs.create_collection(&collection_name).await.expect("Unable to create collection");
+        peer_repo
+            .iroh_blobs
+            .create_collection(&collection_name)
+            .await
+            .expect("Unable to create collection");
 
         // Create a file stream using mpsc
         let (tx, rx) = mpsc::channel(1);
         tx.send(Ok(data_to_upload.clone())).await.unwrap();
         drop(tx); // Close the sender
 
-        let iroh_blobs = backend
-            .iroh_blobs
-            .as_ref()
+        let iroh_blobs = backend1
+            .get_iroh_blobs()
+            .await
             .expect("iroh_blobs not initialized");
 
         // Upload using the new method `upload_to`
@@ -831,16 +831,33 @@ mod tests {
             .set_file(&collection_name, &file_path, &file_hash)
             .await
             .expect("Unable to add file to collection");
-        assert!(!new_file_collection_hash.as_bytes().is_empty(), "New collection hash after uploading a file should not be empty");
+        assert!(
+            !new_file_collection_hash.as_bytes().is_empty(),
+            "New collection hash after uploading a file should not be empty"
+        );
 
+        let joined_group = backend2
+            .join_from_url(&group1.get_url())
+            .await
+            .expect("Unable to join group on second peer");
+
+        assert!(
+            !new_file_collection_hash.as_bytes().is_empty(),
+            "New collection hash after uploading a file should not be empty"
+        );
+        println!("Asking peers");
         // Add delay to allow peers to propagate the hash
         sleep(Duration::from_secs(5)).await;
+        println!("Asking peers!");
 
         // Retry checking if peers have the hash
-        let mut retries = 10;
+        let mut retries = 2;
         let mut peers_have = false;
         while retries > 0 {
-            peers_have = group.peers_have_hash(&file_hash).await.unwrap_or(false);
+            peers_have = joined_group
+                .peers_have_hash(&file_hash)
+                .await
+                .unwrap_or(false);
             if peers_have {
                 break;
             }
@@ -850,7 +867,7 @@ mod tests {
 
         assert!(peers_have, "Peers should have the uploaded hash");
 
-        backend.stop().await.expect("Unable to stop");
+        veilid_api.shutdown().await;
         Ok(())
     }
 
@@ -860,38 +877,74 @@ mod tests {
         // Setup temporary directory for backend and veilid blobs
         let path = TmpDir::new("test_backend_create_collection").await.unwrap();
         let port = 8080;
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
 
         // Initialize the backend
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Step 1: Create a group via backend
-        let group = backend.create_group().await.expect("Unable to create group");
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
 
         // Step 2: Create a collection via the backend's veilid_iroh_blobs instance
         let collection_name = "test_collection".to_string();
-        let iroh_blobs = backend.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
-        let collection_hash = iroh_blobs.create_collection(&collection_name).await.expect("Failed to create collection");
-        
-        assert!(!collection_hash.as_bytes().is_empty(), "Collection hash should not be empty");
+
+        let iroh_blobs = backend
+            .get_iroh_blobs()
+            .await
+            .expect("iroh_blobs not initialized");
+        let collection_hash = iroh_blobs
+            .create_collection(&collection_name)
+            .await
+            .expect("Failed to create collection");
+
+        assert!(
+            !collection_hash.as_bytes().is_empty(),
+            "Collection hash should not be empty"
+        );
 
         // Step 3: Upload a file to the collection
         let file_path = path.as_ref().join("test_file.txt");
         let file_content = b"Test content for collection upload";
-        fs::write(&file_path, file_content).await.expect("Failed to write to file");
+        fs::write(&file_path, file_content)
+            .await
+            .expect("Failed to write to file");
 
-        let file_hash = iroh_blobs.upload_from_path(file_path.clone()).await.expect("Failed to upload file");
-        assert!(!file_hash.as_bytes().is_empty(), "File hash should not be empty");
+        let file_hash = iroh_blobs
+            .upload_from_path(file_path.clone())
+            .await
+            .expect("Failed to upload file");
+        assert!(
+            !file_hash.as_bytes().is_empty(),
+            "File hash should not be empty"
+        );
 
         // Step 4: Add the file to the collection
-        let updated_collection_hash = iroh_blobs.set_file(&collection_name, "test_file.txt", &file_hash).await.expect("Failed to set file in collection");
+        let updated_collection_hash = iroh_blobs
+            .set_file(&collection_name, "test_file.txt", &file_hash)
+            .await
+            .expect("Failed to set file in collection");
 
-        assert!(!updated_collection_hash.as_bytes().is_empty(), "Updated collection hash should not be empty");
+        assert!(
+            !updated_collection_hash.as_bytes().is_empty(),
+            "Updated collection hash should not be empty"
+        );
 
         // Step 5: Verify that the file is listed in the collection
-        let file_list = iroh_blobs.list_files(&collection_name).await.expect("Failed to list files in collection");
-        assert_eq!(file_list.len(), 1, "There should be one file in the collection");
+        let file_list = iroh_blobs
+            .list_files(&collection_name)
+            .await
+            .expect("Failed to list files in collection");
+        assert_eq!(
+            file_list.len(),
+            1,
+            "There should be one file in the collection"
+        );
         assert_eq!(file_list[0], "test_file.txt", "File name should match");
 
         // Clean up
@@ -905,41 +958,83 @@ mod tests {
         // Setup temporary directory for backend and veilid blobs
         let path = TmpDir::new("test_backend_delete_file").await.unwrap();
         let port = 8080;
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
 
         // Initialize the backend
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Step 1: Create a group via backend
-        let group = backend.create_group().await.expect("Unable to create group");
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
 
         // Step 2: Create a collection via the backend's veilid_iroh_blobs instance
         let collection_name = "test_delete_collection".to_string();
-        let iroh_blobs = backend.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
-        let collection_hash = iroh_blobs.create_collection(&collection_name).await.expect("Failed to create collection");
-        
-        assert!(!collection_hash.as_bytes().is_empty(), "Collection hash should not be empty");
+
+        let iroh_blobs = backend
+            .get_iroh_blobs()
+            .await
+            .expect("iroh_blobs not initialized");
+
+        let collection_hash = iroh_blobs
+            .create_collection(&collection_name)
+            .await
+            .expect("Failed to create collection");
+
+        assert!(
+            !collection_hash.as_bytes().is_empty(),
+            "Collection hash should not be empty"
+        );
 
         // Step 3: Upload a file to the collection
         let file_path = path.as_ref().join("test_file_to_delete.txt");
         let file_content = b"File content to be deleted";
-        fs::write(&file_path, file_content).await.expect("Failed to write to file");
+        fs::write(&file_path, file_content)
+            .await
+            .expect("Failed to write to file");
 
-        let file_hash = iroh_blobs.upload_from_path(file_path.clone()).await.expect("Failed to upload file");
-        assert!(!file_hash.as_bytes().is_empty(), "File hash should not be empty");
+        let file_hash = iroh_blobs
+            .upload_from_path(file_path.clone())
+            .await
+            .expect("Failed to upload file");
+        assert!(
+            !file_hash.as_bytes().is_empty(),
+            "File hash should not be empty"
+        );
 
         // Step 4: Add the file to the collection
-        let updated_collection_hash = iroh_blobs.set_file(&collection_name, "test_file_to_delete.txt", &file_hash).await.expect("Failed to set file in collection");
-        assert!(!updated_collection_hash.as_bytes().is_empty(), "Updated collection hash should not be empty");
+        let updated_collection_hash = iroh_blobs
+            .set_file(&collection_name, "test_file_to_delete.txt", &file_hash)
+            .await
+            .expect("Failed to set file in collection");
+        assert!(
+            !updated_collection_hash.as_bytes().is_empty(),
+            "Updated collection hash should not be empty"
+        );
 
         // Step 5: Delete the file from the collection
-        let new_collection_hash = iroh_blobs.delete_file(&collection_name, "test_file_to_delete.txt").await.expect("Failed to delete file from collection");
-        assert!(!new_collection_hash.as_bytes().is_empty(), "New collection hash after deletion should not be empty");
+        let new_collection_hash = iroh_blobs
+            .delete_file(&collection_name, "test_file_to_delete.txt")
+            .await
+            .expect("Failed to delete file from collection");
+        assert!(
+            !new_collection_hash.as_bytes().is_empty(),
+            "New collection hash after deletion should not be empty"
+        );
 
         // Step 6: Verify that the file was deleted
-        let file_list_after_deletion = iroh_blobs.list_files(&collection_name).await.expect("Failed to list files in collection");
-        assert!(file_list_after_deletion.is_empty(), "The collection should be empty after deleting the file");
+        let file_list_after_deletion = iroh_blobs
+            .list_files(&collection_name)
+            .await
+            .expect("Failed to list files in collection");
+        assert!(
+            file_list_after_deletion.is_empty(),
+            "The collection should be empty after deleting the file"
+        );
 
         // Clean up
         backend.stop().await.expect("Unable to stop backend");
@@ -950,22 +1045,25 @@ mod tests {
     #[serial]
     async fn test_repo_collection_management() -> Result<()> {
         // Setup a temporary directory and initialize the backend
-        let path = TmpDir::new("test_repo_collection_management").await.unwrap();
-        let port = 8080;
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+        let path = TmpDir::new("test_repo_collection_management")
+            .await
+            .unwrap();
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
 
         // Initialize the backend
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Step 1: Create a group
-        let mut group = backend.create_group().await.expect("Failed to create group");
+        let mut group = backend
+            .create_group()
+            .await
+            .expect("Failed to create group");
 
         // Step 2: Create a repo and verify it can write (i.e., has a secret key)
-        let mut repo = backend
-            .create_repo(&group.id())
-            .await
-            .expect("Failed to create repo");
+        let mut repo = group.create_repo().await.expect("Failed to create repo");
 
         assert!(repo.can_write(), "Repo should have write access");
 
@@ -976,41 +1074,66 @@ mod tests {
             .await
             .expect("Unable to set repo name");
 
-        // Step 4: Add the repo to the group
-        group.add_repo(repo.clone()).expect("Failed to add repo to group");
-
-         // Step 5: Upload a file, which implicitly creates the collection
+        // Step 5: Upload a file, which implicitly creates the collection
         let file_name = "example.txt";
         let file_content = b"Test content for file upload";
 
         // Upload the file (this will automatically create or get the collection)
         let file_hash = repo.upload(file_name, file_content.to_vec()).await?;
-        assert!(!file_hash.as_bytes().is_empty(), "File hash should not be empty after upload");
-       
+        assert!(
+            !file_hash.as_bytes().is_empty(),
+            "File hash should not be empty after upload"
+        );
+
         // Step 6: Use iroh_blobs set_file to update the collection with the uploaded file
-        let iroh_blobs = backend.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
+        let iroh_blobs = backend
+            .get_iroh_blobs()
+            .await
+            .expect("iroh_blobs not initialized");
+
         let collection_name = repo.get_name().await.expect("Failed to get repo name");
-        let updated_collection_hash = iroh_blobs.set_file(&collection_name, file_name, &file_hash).await?;
-        assert!(!updated_collection_hash.as_bytes().is_empty(), "Updated collection hash should not be empty after adding file");
+        let updated_collection_hash = repo
+            .set_file_and_update_dht(&collection_name, file_name, &file_hash)
+            .await?;
+        assert!(
+            !updated_collection_hash.as_bytes().is_empty(),
+            "Updated collection hash should not be empty after adding file"
+        );
 
         // Step 7: Verify the file is listed in the collection
         let file_list = repo.list_files().await?;
-        assert_eq!(file_list.len(), 1, "There should be one file in the collection");
-        assert_eq!(file_list[0], file_name, "The listed file should match the uploaded file");
+        assert_eq!(
+            file_list.len(),
+            1,
+            "There should be one file in the collection"
+        );
+        assert_eq!(
+            file_list[0], file_name,
+            "The listed file should match the uploaded file"
+        );
 
         // Step 8: Retrieve the file hash from the collection and verify it matches the uploaded hash
         let retrieved_file_hash = repo.get_file_hash(file_name).await?;
-        assert_eq!(file_hash, retrieved_file_hash, "The retrieved file hash should match the uploaded file hash");
+        assert_eq!(
+            file_hash, retrieved_file_hash,
+            "The retrieved file hash should match the uploaded file hash"
+        );
 
         // Step 9: Delete the file from the collection
         let collection_hash_after_deletion = repo.delete_file(file_name).await?;
-        assert!(!collection_hash_after_deletion.as_bytes().is_empty(), "Collection hash should not be empty after file deletion");
+        assert!(
+            !collection_hash_after_deletion.as_bytes().is_empty(),
+            "Collection hash should not be empty after file deletion"
+        );
 
         // Step 10: Verify the file is no longer listed in the collection
         let file_list_after_deletion = repo.list_files().await?;
-        assert!(file_list_after_deletion.is_empty(), "The file list should be empty after deleting the file");
+        assert!(
+            file_list_after_deletion.is_empty(),
+            "The file list should be empty after deleting the file"
+        );
 
-        // Final Step -> Clean up 
+        // Final Step -> Clean up
         backend.stop().await.expect("Unable to stop backend");
         Ok(())
     }
@@ -1019,36 +1142,66 @@ mod tests {
     #[serial]
     async fn test_collection_hash_consistency() -> Result<()> {
         // Setup temporary directory and initialize the backend
-        let path = TmpDir::new("test_backend_collection_hash_consistency").await.unwrap();
-        let port = 8080;
-        fs::create_dir_all(path.as_ref()).await.expect("Failed to create base directory");
+        let path = TmpDir::new("test_backend_collection_hash_consistency")
+            .await
+            .unwrap();
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
 
-        let mut backend = Backend::new(path.as_ref(), port).expect("Unable to create Backend");
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
         // Step 1: Create a group and a collection
-        let group = backend.create_group().await.expect("Unable to create group");
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
         let collection_name = "hash_consistency_collection".to_string();
-        let iroh_blobs = backend.iroh_blobs.as_ref().expect("iroh_blobs not initialized");
+
+        let iroh_blobs = backend
+            .get_iroh_blobs()
+            .await
+            .expect("iroh_blobs not initialized");
 
         // Step 2: Create collection and get initial hash
-        let initial_collection_hash = iroh_blobs.create_collection(&collection_name).await.expect("Failed to create collection");
-        
+        let initial_collection_hash = iroh_blobs
+            .create_collection(&collection_name)
+            .await
+            .expect("Failed to create collection");
+
         // Step 3: Upload a file to the collection
         let file_path = path.as_ref().join("file1.txt");
         let file_content = b"Content of file 1";
-        fs::write(&file_path, file_content).await.expect("Failed to write file 1");
+        fs::write(&file_path, file_content)
+            .await
+            .expect("Failed to write file 1");
 
-        let file_hash = iroh_blobs.upload_from_path(file_path.clone()).await.expect("Failed to upload file 1");
-        let updated_collection_hash = iroh_blobs.set_file(&collection_name, "file1.txt", &file_hash).await.expect("Failed to set file in collection");
+        let file_hash = iroh_blobs
+            .upload_from_path(file_path.clone())
+            .await
+            .expect("Failed to upload file 1");
+        let updated_collection_hash = iroh_blobs
+            .set_file(&collection_name, "file1.txt", &file_hash)
+            .await
+            .expect("Failed to set file in collection");
 
         // Verify that the collection hash changed after adding a file
-        assert_ne!(initial_collection_hash, updated_collection_hash, "The collection hash should change after a file is added");
+        assert_ne!(
+            initial_collection_hash, updated_collection_hash,
+            "The collection hash should change after a file is added"
+        );
 
         // Step 4: Remove the file and verify the hash changes again
-        let final_collection_hash = iroh_blobs.delete_file(&collection_name, "file1.txt").await.expect("Failed to delete file from collection");
+        let final_collection_hash = iroh_blobs
+            .delete_file(&collection_name, "file1.txt")
+            .await
+            .expect("Failed to delete file from collection");
 
-        assert_ne!(updated_collection_hash, final_collection_hash, "The collection hash should change after a file is removed");
+        assert_ne!(
+            updated_collection_hash, final_collection_hash,
+            "The collection hash should change after a file is removed"
+        );
 
         // Clean up
         backend.stop().await.expect("Unable to stop backend");
