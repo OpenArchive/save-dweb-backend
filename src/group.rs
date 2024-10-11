@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use url::Url;
@@ -104,16 +105,21 @@ impl Group {
         let mut repos = self.list_peer_repos();
         repos.shuffle(&mut rng);
 
+        if repos.len() == 0 {
+            return Err(anyhow!("Cannot download hash. No other peers found"));
+        }
+
         for repo in repos.iter() {
             if let Ok(route_id_blob) = repo.get_route_id_blob().await {
                 // It's faster to try and fail, than to ask then try
-                if (self
+                let result = self
                     .iroh_blobs
                     .download_file_from(route_id_blob, hash)
-                    .await)
-                    .is_ok()
-                {
+                    .await;
+                if result.is_ok() {
                     return Ok(());
+                } else {
+                    eprintln!("Unable to download from peer, {}", result.unwrap_err());
                 }
             }
         }
@@ -203,7 +209,7 @@ impl Group {
         while count < (size - 1) {
             let value = self
                 .routing_context
-                .get_dht_value(record_key, count.try_into()?, false)
+                .get_dht_value(record_key, (count + 1).try_into()?, true)
                 .await?;
             if value.is_some() {
                 count += 1;
@@ -223,8 +229,6 @@ impl Group {
         let repo_key = repo.id().to_vec();
 
         let count = self.dht_repo_count().await? + 1;
-
-        println!("Advertising own repo {}", count);
 
         self.routing_context
             .set_dht_value(
@@ -274,7 +278,7 @@ impl Group {
     async fn load_repo_from_dht(&mut self, subkey: u32) -> Result<CryptoTyped<CryptoKey>> {
         let repo_id_raw = self
             .routing_context
-            .get_dht_value(self.dht_record.key().clone(), subkey, false)
+            .get_dht_value(self.dht_record.key().clone(), subkey, true)
             .await?
             .ok_or_else(|| anyhow!("Unable to load repo ID from DHT"))?;
 
@@ -293,7 +297,7 @@ impl Group {
         let count = self.dht_repo_count().await?;
 
         let mut i = 1;
-        while i < count {
+        while i <= count {
             println!("Loading from DHT {}", i);
             self.load_repo_from_dht(i.try_into()?).await?;
             i += 1;

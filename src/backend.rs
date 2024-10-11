@@ -29,7 +29,7 @@ use veilid_core::{
     CRYPTO_KEY_LENGTH, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
-use veilid_iroh_blobs::tunnels::OnNewRouteCallback;
+use veilid_iroh_blobs::tunnels::{OnNewRouteCallback, OnRouteDisconnectedCallback};
 use xdg::BaseDirectories;
 
 #[derive(Serialize, Deserialize)]
@@ -144,6 +144,10 @@ impl Backend {
             });
         });
 
+        let on_disconnected_callback: OnRouteDisconnectedCallback = Arc::new(move || {
+            println!("Route died");
+        });
+
         let (route_id, route_id_blob) = make_route(&veilid_api).await?;
         let routing_context = veilid_api.routing_context()?;
 
@@ -157,7 +161,7 @@ impl Backend {
             route_id,
             inner.update_rx.as_ref().unwrap().resubscribe(),
             store,
-            None, // TODO: Notify application of route closure?
+            Some(on_disconnected_callback), // TODO: Notify application of route closure?
             Some(on_new_route_callback),
         ));
 
@@ -177,7 +181,7 @@ impl Backend {
         let base_dir = inner.path.clone();
         fs::create_dir_all(&base_dir).await?;
 
-        let (veilid_api, mut update_rx) = init_veilid(&base_dir).await?;
+        let (veilid_api, mut update_rx) = init_veilid(&base_dir, "openarchive".to_string()).await?;
 
         inner.veilid_api = Some(veilid_api.clone());
         inner.update_rx = Some(update_rx.resubscribe());
