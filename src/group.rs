@@ -288,6 +288,9 @@ impl Group {
 
         let repo_id = TypedKey::new(CRYPTO_KIND_VLD0, CryptoKey::from(repo_id_buffer));
 
+        if self.repos.contains_key(&repo_id.value) {
+            return Ok(repo_id);
+        }
         self.load_repo_from_network(repo_id).await?;
 
         Ok(repo_id)
@@ -316,6 +319,8 @@ impl Group {
         let mut group_repo_key = self.id().to_string();
         group_repo_key.push_str("-repo");
 
+        println!("Loading own repo secret {}", group_repo_key);
+
         let key_bytes = protected_store
             .load_user_secret(group_repo_key)
             .await
@@ -343,6 +348,7 @@ impl Group {
             .secret_key
             .map(|key| TypedKey::new(CRYPTO_KIND_VLD0, key));
 
+        println!("Loaded own repo secret {:?}", secret_key);
         let repo = Repo {
             dht_record,
             encryption_key: self.encryption_key.clone(),
@@ -403,6 +409,7 @@ impl Group {
 
         let mut group_repo_key = self.id().to_string();
         group_repo_key.push_str("-repo");
+        println!("SAving own repo secret {}", group_repo_key);
         let key_bytes = *repo.id();
         protected_store
             .save_user_secret(group_repo_key, key_bytes.as_slice())
