@@ -325,6 +325,41 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    async fn known_group_persistence() -> Result<()> {
+        let path = TmpDir::new("test_dweb_backend").await.unwrap();
+
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
+        group
+            .set_name(TEST_GROUP_NAME)
+            .await
+            .expect(UNABLE_TO_SET_GROUP_NAME);
+
+        drop(group);
+
+        backend.stop().await.expect("Unable to stop");
+
+        backend.start().await.expect("Unable to restart");
+
+        let list = backend.list_groups().await?;
+
+        assert_eq!(list.len(), 1, "Group auto-loaded on start");
+
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn group_name_persistence() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
 

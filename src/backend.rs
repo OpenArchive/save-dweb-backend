@@ -1,3 +1,4 @@
+use crate::backend;
 use crate::common::{init_veilid, make_route, CommonKeypair, DHTEntity};
 use crate::constants::KNOWN_GROUP_LIST;
 use crate::group::{self, Group, URL_DHT_KEY, URL_ENCRYPTION_KEY, URL_PUBLIC_KEY, URL_SECRET_KEY};
@@ -32,7 +33,7 @@ use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 use veilid_iroh_blobs::tunnels::{OnNewRouteCallback, OnRouteDisconnectedCallback};
 use xdg::BaseDirectories;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct KnownGroupList {
     groups: Vec<CryptoKey>,
 }
@@ -51,12 +52,13 @@ impl BackendInner {
 
         let info = KnownGroupList { groups };
 
+        println!("Saving group IDs {:?}", info);
         let data =
             serde_cbor::to_vec(&info).map_err(|e| anyhow!("Failed to serialize keypair: {}", e))?;
         self.get_protected_store()?
             .save_user_secret(KNOWN_GROUP_LIST, &data)
             .await
-            .map_err(|e| anyhow!("Unable to store keypair: {}", e))?;
+            .map_err(|e| anyhow!("Unable to store known group IDs: {}", e))?;
         Ok(())
     }
 
@@ -229,6 +231,12 @@ impl Backend {
             Some(on_new_route_callback),
         ));
 
+        drop(inner);
+
+        if let Err(err) = self.load_known_groups().await {
+            eprintln!("No known groups on start");
+        }
+
         Ok(())
     }
 
@@ -396,7 +404,7 @@ impl Backend {
         Ok(inner.groups.values().cloned().collect())
     }
 
-    pub async fn load_known_groups(self) -> Result<()> {
+    pub async fn load_known_groups(&self) -> Result<()> {
         for id in self.list_known_group_ids().await?.iter() {
             self.get_group(id).await?;
         }
