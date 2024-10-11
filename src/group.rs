@@ -111,6 +111,12 @@ impl Group {
 
         for repo in repos.iter() {
             if let Ok(route_id_blob) = repo.get_route_id_blob().await {
+                println!(
+                    "Downloading {} from {} via {:?}",
+                    hash,
+                    repo.id(),
+                    route_id_blob
+                );
                 // It's faster to try and fail, than to ask then try
                 let result = self
                     .iroh_blobs
@@ -129,8 +135,8 @@ impl Group {
 
     pub async fn peers_have_hash(&self, hash: &Hash) -> Result<bool> {
         for repo in self.list_peer_repos().iter() {
-            println!("Askinng {} from {}", hash, repo.id());
             if let Ok(route_id_blob) = repo.get_route_id_blob().await {
+                println!("Asking {} from {} via {:?}", hash, repo.id(), route_id_blob);
                 if let Ok(has) = self.iroh_blobs.ask_hash(route_id_blob, *hash).await {
                     if has {
                         return Ok(true);
@@ -319,8 +325,6 @@ impl Group {
         let mut group_repo_key = self.id().to_string();
         group_repo_key.push_str("-repo");
 
-        println!("Loading own repo secret {}", group_repo_key);
-
         let key_bytes = protected_store
             .load_user_secret(group_repo_key)
             .await
@@ -348,7 +352,6 @@ impl Group {
             .secret_key
             .map(|key| TypedKey::new(CRYPTO_KIND_VLD0, key));
 
-        println!("Loaded own repo secret {:?}", secret_key);
         let repo = Repo {
             dht_record,
             encryption_key: self.encryption_key.clone(),
@@ -357,6 +360,7 @@ impl Group {
             crypto_system: self.get_crypto_system(),
             iroh_blobs: self.iroh_blobs.clone(),
         };
+        repo.update_route_on_dht().await?;
 
         self.add_repo(repo)
     }
@@ -409,7 +413,6 @@ impl Group {
 
         let mut group_repo_key = self.id().to_string();
         group_repo_key.push_str("-repo");
-        println!("SAving own repo secret {}", group_repo_key);
         let key_bytes = *repo.id();
         protected_store
             .save_user_secret(group_repo_key, key_bytes.as_slice())

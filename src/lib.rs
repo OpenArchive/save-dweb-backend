@@ -30,8 +30,10 @@ mod tests {
     use bytes::Bytes;
     use common::init_veilid;
     use std::path::Path;
+    use std::result;
     use tmpdir::TmpDir;
     use tokio::fs;
+    use tokio::join;
     use tokio::sync::mpsc;
     use tokio::time::sleep;
     use tokio::time::Duration;
@@ -719,14 +721,19 @@ mod tests {
             .await
             .unwrap();
 
+        let base_dir_path = base_dir.to_path_buf();
+
         let store1 =
             iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh1")).await?;
         let store2 =
             iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh2")).await?;
-        let (veilid_api1, mut update_rx1) =
-            init_veilid(&base_dir.to_path_buf(), "downloadpeers1".to_string()).await?;
-        let (veilid_api2, mut update_rx2) =
-            init_veilid(&base_dir.to_path_buf(), "downloadpeers2".to_string()).await?;
+
+        let (v1_result, v2_result) = join!(
+            init_veilid(&base_dir_path, "downloadpeers1".to_string()),
+            init_veilid(&base_dir_path, "downloadpeers2".to_string())
+        );
+        let (veilid_api1, mut update_rx1) = v1_result?;
+        let (veilid_api2, mut update_rx2) = v2_result?;
 
         fs::create_dir_all(base_dir.as_ref())
             .await
@@ -790,14 +797,9 @@ mod tests {
             "New collection hash after uploading a file should not be empty"
         );
 
-        println!("Original group {}", group.dht_record.key());
-
-        let group2 = backend2.join_from_url(&group.get_url()).await?;
-
-        // Add delay to allow peers to propagate the hash
         sleep(Duration::from_secs(1)).await;
 
-        println!("Asking peers");
+        let group2 = backend2.join_from_url(&group.get_url()).await?;
 
         // Download hash from peers
         group2.download_hash_from_peers(&file_hash).await?;
@@ -814,15 +816,19 @@ mod tests {
             .await
             .unwrap();
 
+        let base_dir_path = base_dir.to_path_buf();
+
         let store1 =
             iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh1")).await?;
         let store2 =
             iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh2")).await?;
 
-        let (veilid_api1, mut update_rx1) =
-            init_veilid(&base_dir.to_path_buf(), "downloadpeers1".to_string()).await?;
-        let (veilid_api2, mut update_rx2) =
-            init_veilid(&base_dir.to_path_buf(), "downloadpeers2".to_string()).await?;
+        let (v1_result, v2_result) = join!(
+            init_veilid(&base_dir_path, "downloadpeers1".to_string()),
+            init_veilid(&base_dir_path, "downloadpeers2".to_string())
+        );
+        let (veilid_api1, mut update_rx1) = v1_result?;
+        let (veilid_api2, mut update_rx2) = v2_result?;
 
         fs::create_dir_all(base_dir.as_ref())
             .await
@@ -899,10 +905,6 @@ mod tests {
             !new_file_collection_hash.as_bytes().is_empty(),
             "New collection hash after uploading a file should not be empty"
         );
-        println!("Asking peers");
-        // Add delay to allow peers to propagate the hash
-        sleep(Duration::from_secs(5)).await;
-        println!("Asking peers!");
 
         // Retry checking if peers have the hash
         let mut retries = 2;

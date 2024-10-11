@@ -101,9 +101,11 @@ impl Repo {
             .routing_context
             .get_dht_value(self.dht_record.key().clone(), ROUTE_SUBKEY, true)
             .await?
-            .ok_or_else(|| anyhow!("Unable to get DHT value for route id blob"))?;
+            .ok_or_else(|| anyhow!("Unable to get DHT value for route id blob"))?
+            .data()
+            .to_vec();
 
-        Ok(value.data().to_vec())
+        Ok(value)
     }
 
     pub async fn get_file_stream(&self, file_name: &str) -> Result<impl Stream<Item = Vec<u8>>> {
