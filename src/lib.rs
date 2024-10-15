@@ -430,6 +430,10 @@ mod tests {
 
         backend.stop().await.expect("Unable to stop backend");
 
+        let after_stop = backend.list_groups().await?;
+
+        assert_eq!(after_stop.len(), 0, "Groups purged after stop");
+
         backend.start().await.expect("Unable to restart backend");
 
         println!(
@@ -438,6 +442,11 @@ mod tests {
         );
 
         let mut loaded_group = backend.get_group(&group_id).await.expect(GROUP_NOT_FOUND);
+
+        let list = loaded_group.list_repos();
+
+        assert_eq!(list.len(), 1, "One repo got loaded back");
+
         let loaded_repo = loaded_group
             .get_own_repo()
             .expect("Repo not found after restart");
