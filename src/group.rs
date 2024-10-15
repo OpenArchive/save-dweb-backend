@@ -316,7 +316,12 @@ impl Group {
     }
 
     pub async fn try_load_repo_from_disk(&mut self) -> bool {
-        self.load_repo_from_disk().await.is_ok()
+        if let Err(err) = self.load_repo_from_disk().await {
+            eprintln!("Unable to load own repo from disk {}", err);
+            return false;
+        } else {
+            return true;
+        }
     }
 
     pub async fn load_repo_from_disk(&mut self) -> Result<&Box<Repo>> {
@@ -402,7 +407,7 @@ impl Group {
         let keypair = CommonKeypair {
             id: repo.id(),
             public_key: repo_dht_record.owner().clone(),
-            secret_key: self.get_secret_key(),
+            secret_key: repo_dht_record.owner_secret().map(|key| *key),
             encryption_key: encryption_key.clone(),
         };
 

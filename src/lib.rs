@@ -426,6 +426,10 @@ mod tests {
         let repo_id = repo.id();
         println!("lib: Repo created with id: {:?}", repo_id);
 
+        let repos_list = group.list_repos();
+
+        assert_eq!(repos_list.len(), 1, "repo showing up in list");
+
         drop(group);
 
         backend.stop().await.expect("Unable to stop backend");
