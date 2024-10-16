@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::result;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use url::Url;
 use veilid_core::{
     CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, DHTReportScope, DHTSchema,
@@ -34,7 +34,7 @@ pub struct Group {
     pub dht_record: DHTRecordDescriptor,
     pub encryption_key: SharedSecret,
     pub routing_context: RoutingContext,
-    pub repos: HashMap<CryptoKey, Box<Repo>>,
+    pub repos: Arc<Mutex<HashMap<CryptoKey, Repo>>>,
     pub veilid: VeilidAPI,
     pub iroh_blobs: VeilidIrohBlobs,
 }
@@ -51,7 +51,7 @@ impl Group {
             dht_record,
             encryption_key,
             routing_context,
-            repos: HashMap::new(),
+            repos: Arc::new(Mutex::new(HashMap::new())),
             veilid,
             iroh_blobs,
         }
@@ -69,40 +69,57 @@ impl Group {
         self.dht_record.owner_secret().cloned()
     }
 
-    fn add_repo(&mut self, repo: Repo) -> Result<&Box<Repo>> {
+    async fn add_repo(&mut self, repo: Repo) -> Result<()> {
         let id = repo.id();
-        let repo = Box::new(repo);
-        self.repos.insert(id, repo);
-        Ok(self.repos.get(&id).unwrap())
+        self.repos.lock().await.insert(id, repo);
+        Ok(())
     }
 
-    pub fn get_repo(&self, id: &CryptoKey) -> Result<&Box<Repo>> {
-        self.repos.get(id).ok_or_else(|| anyhow!("Repo not loaded"))
-    }
-
-    pub fn has_repo(&self, id: &CryptoKey) -> bool {
-        self.repos.contains_key(id)
-    }
-
-    pub fn list_repos(&self) -> Vec<CryptoKey> {
-        self.repos.values().map(|repo| repo.get_id()).collect()
-    }
-
-    pub fn get_own_repo(&self) -> Option<&Box<Repo>> {
-        self.repos.values().find(|repo| repo.can_write())
-    }
-
-    pub fn list_peer_repos(&self) -> Vec<&Box<Repo>> {
+    pub async fn get_repo(&self, id: &CryptoKey) -> Result<Repo> {
         self.repos
+            .lock()
+            .await
+            .get(id)
+            .ok_or_else(|| anyhow!("Repo not loaded"))
+            .map(|repo| repo.clone())
+    }
+
+    pub async fn has_repo(&self, id: &CryptoKey) -> bool {
+        self.repos.lock().await.contains_key(id)
+    }
+
+    pub async fn list_repos(&self) -> Vec<CryptoKey> {
+        self.repos
+            .lock()
+            .await
+            .values()
+            .map(|repo| repo.get_id())
+            .collect()
+    }
+
+    pub async fn get_own_repo(&self) -> Option<Repo> {
+        self.repos
+            .lock()
+            .await
+            .values()
+            .find(|repo| repo.can_write())
+            .cloned()
+    }
+
+    pub async fn list_peer_repos(&self) -> Vec<Repo> {
+        self.repos
+            .lock()
+            .await
             .values()
             .filter(|repo| !repo.can_write())
+            .cloned()
             .collect()
     }
 
     pub async fn download_hash_from_peers(&self, hash: &Hash) -> Result<()> {
         // Ask peers to download in random order
         let mut rng = thread_rng();
-        let mut repos = self.list_peer_repos();
+        let mut repos = self.list_peer_repos().await;
         repos.shuffle(&mut rng);
 
         if repos.len() == 0 {
@@ -134,7 +151,7 @@ impl Group {
     }
 
     pub async fn peers_have_hash(&self, hash: &Hash) -> Result<bool> {
-        for repo in self.list_peer_repos().iter() {
+        for repo in self.list_peer_repos().await.iter() {
             if let Ok(route_id_blob) = repo.get_route_id_blob().await {
                 println!("Asking {} from {} via {:?}", hash, repo.id(), route_id_blob);
                 if let Ok(has) = self.iroh_blobs.ask_hash(route_id_blob, *hash).await {
@@ -168,7 +185,7 @@ impl Group {
     }
 
     pub async fn get_repo_name(&self, repo_key: CryptoKey) -> Result<String> {
-        if let Some(repo) = self.repos.get(&repo_key) {
+        if let Some(repo) = self.repos.lock().await.get(&repo_key) {
             repo.get_name().await
         } else {
             Err(anyhow!("Repo not found"))
@@ -230,6 +247,7 @@ impl Group {
     pub async fn advertise_own_repo(&self) -> Result<()> {
         let repo = self
             .get_own_repo()
+            .await
             .ok_or_else(|| anyhow!("No own repo found for group"))?;
 
         let repo_key = repo.id().to_vec();
@@ -251,7 +269,7 @@ impl Group {
     pub async fn load_repo_from_network(
         &mut self,
         repo_id: TypedKey,
-    ) -> Result<&Box<Repo>, anyhow::Error> {
+    ) -> Result<Repo, anyhow::Error> {
         // TODO: Load keypair from DHT
         //        let protected_store = self.protected_store().unwrap();
         // Load keypair using the repo ID
@@ -278,7 +296,9 @@ impl Group {
             iroh_blobs: self.iroh_blobs.clone(),
         };
 
-        self.add_repo(repo)
+        self.add_repo(repo.clone());
+
+        Ok(repo)
     }
 
     async fn load_repo_from_dht(&mut self, subkey: u32) -> Result<CryptoTyped<CryptoKey>> {
@@ -294,7 +314,7 @@ impl Group {
 
         let repo_id = TypedKey::new(CRYPTO_KIND_VLD0, CryptoKey::from(repo_id_buffer));
 
-        if self.repos.contains_key(&repo_id.value) {
+        if self.repos.lock().await.contains_key(&repo_id.value) {
             return Ok(repo_id);
         }
         self.load_repo_from_network(repo_id).await?;
@@ -324,7 +344,7 @@ impl Group {
         }
     }
 
-    pub async fn load_repo_from_disk(&mut self) -> Result<&Box<Repo>> {
+    pub async fn load_repo_from_disk(&mut self) -> Result<Repo> {
         let protected_store = self.veilid.protected_store().unwrap();
 
         let mut group_repo_key = self.id().to_string();
@@ -367,11 +387,13 @@ impl Group {
         };
         repo.update_route_on_dht().await?;
 
-        self.add_repo(repo)
+        self.add_repo(repo.clone()).await?;
+
+        Ok(repo)
     }
 
-    pub async fn create_repo(&mut self) -> Result<&Box<Repo>, anyhow::Error> {
-        if self.get_own_repo().is_some() {
+    pub async fn create_repo(&mut self) -> Result<Repo, anyhow::Error> {
+        if self.get_own_repo().await.is_some() {
             return Err(anyhow!("Own repo already created for group"));
         }
 
@@ -424,11 +446,12 @@ impl Group {
             .await
             .map_err(|e| anyhow!("Unable to store repo id for group: {}", e))?;
 
-        self.add_repo(repo)?;
+        self.add_repo(repo).await?;
 
         self.advertise_own_repo().await?;
 
         self.get_own_repo()
+            .await
             .ok_or_else(|| anyhow!("Unexpected error, created repo not persisted"))
     }
 

@@ -218,11 +218,11 @@ mod tests {
         assert_eq!(name, repo_name);
 
         // Step 5: List known repos and verify the repo is in the list
-        let repos = group.list_repos();
+        let repos = group.list_repos().await;
         assert!(repos.contains(&repo_key));
 
         // Step 6: Retrieve the repo by key and check its name
-        let loaded_repo = group.get_repo(&repo_key).expect("Repo not found");
+        let loaded_repo = group.get_repo(&repo_key).await.expect("Repo not found");
 
         let retrieved_name = loaded_repo
             .get_name()
@@ -399,31 +399,31 @@ mod tests {
     #[serial]
     async fn repo_persistence() -> Result<()> {
         let path = TmpDir::new("test_dweb_backend").await.unwrap();
-    
+
         fs::create_dir_all(path.as_ref())
             .await
             .expect("Failed to create base directory");
-    
+
         let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start backend");
-    
+
         let mut group = backend
             .create_group()
             .await
             .expect("Failed to create group");
         let group_id = group.id();
-    
+
         // Drop the group and stop the backend
         drop(group);
         backend.stop().await.expect("Unable to stop backend");
-    
+
         // Restart backend and verify group and repo persistence
         backend.start().await.expect("Unable to restart backend");
         println!(
             "Backend restarted, attempting to load group with ID: {:?}",
             group_id
         );
-    
+
         let mut reload_group = backend.get_group(&group_id).await.expect(GROUP_NOT_FOUND);
         let loaded_group_id = reload_group.id();
 
@@ -438,33 +438,38 @@ mod tests {
             loaded_group_id
         );
 
-
-        let mut loaded_group = backend.get_group(&loaded_group_id).await.expect(GROUP_NOT_FOUND);
+        let mut loaded_group = backend
+            .get_group(&loaded_group_id)
+            .await
+            .expect(GROUP_NOT_FOUND);
         println!("group reloaded with id: {:?}", loaded_group_id);
-        let repo = loaded_group.create_repo().await.expect("Unable to create repo");
-    
+        let repo = loaded_group
+            .create_repo()
+            .await
+            .expect("Unable to create repo");
+
         let repo_name = "Test Repo";
         repo.set_name(repo_name)
             .await
             .expect("Unable to set repo name");
-    
+
         let initial_name = repo.get_name().await.expect("Unable to get repo name");
         assert_eq!(initial_name, repo_name, "Initial repo name doesn't match");
-    
+
         let repo_id = repo.id();
         println!("lib: Repo created with id: {:?}", repo_id);
-    
-    
+
         // Check if the repo is listed after restart
-        let list = loaded_group.list_repos();
+        let list = loaded_group.list_repos().await;
         assert_eq!(list.len(), 1, "One repo got loaded back");
-    
+
         let loaded_repo = loaded_group
             .get_own_repo()
+            .await
             .expect("Repo not found after restart");
 
         println!("a list of repos: {:?}", list);
-    
+
         let retrieved_name = loaded_repo
             .get_name()
             .await
@@ -473,26 +478,37 @@ mod tests {
             retrieved_name, repo_name,
             "Repo name doesn't persist after restart"
         );
-    
+
         // Drop the group again and test reloading
         drop(loaded_group);
-        backend.stop().await.expect("Unable to stop backend after second drop");
-    
-        backend.start().await.expect("Unable to restart backend after second drop");
-    
+        backend
+            .stop()
+            .await
+            .expect("Unable to stop backend after second drop");
+
+        backend
+            .start()
+            .await
+            .expect("Unable to restart backend after second drop");
+
         // Verify the group and repos again
         let reloaded_group = backend.get_group(&group_id).await.expect(GROUP_NOT_FOUND);
-        let reloaded_repos = reloaded_group.list_repos();
-        assert_eq!(reloaded_repos.len(), 1, "One repo loaded after second restart");
+        let reloaded_repos = reloaded_group.list_repos().await;
+        assert_eq!(
+            reloaded_repos.len(),
+            1,
+            "One repo loaded after second restart"
+        );
 
-        let another_list = reloaded_group.list_repos();
+        let another_list = reloaded_group.list_repos().await;
 
         println!("Another list of repos: {:?}", another_list);
-    
+
         let reloaded_repo = reloaded_group
             .get_own_repo()
+            .await
             .expect("Repo not found after second restart");
-        
+
         let final_name = reloaded_repo
             .get_name()
             .await
@@ -501,15 +517,15 @@ mod tests {
             final_name, repo_name,
             "Repo name doesn't persist after second restart"
         );
-    
+
         let known = backend.list_known_group_ids().await?;
         assert_eq!(known.len(), 1, "One group got saved");
-    
+
         backend
             .stop()
             .await
             .expect("Unable to stop backend after verification");
-    
+
         Ok(())
     }
 
@@ -729,7 +745,7 @@ mod tests {
         let repo1 = group.create_repo().await?.clone();
 
         // List repos and verify
-        let repos = group.list_repos();
+        let repos = group.list_repos().await;
         assert!(repos.contains(&repo1.get_id()));
 
         backend.stop().await.expect("Unable to stop");
@@ -756,7 +772,7 @@ mod tests {
         let writable_repo = group.create_repo().await?.clone();
 
         // Verify own repo is found
-        let own_repo = group.get_own_repo();
+        let own_repo = group.get_own_repo().await;
         assert!(own_repo.is_some());
         assert_eq!(own_repo.unwrap().get_id(), writable_repo.get_id());
 

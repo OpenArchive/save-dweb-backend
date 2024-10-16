@@ -132,7 +132,7 @@ impl Backend {
                 let inner = inner.lock().await;
 
                 for group in inner.groups.clone().into_values() {
-                    if let Some(repo) = group.get_own_repo() {
+                    if let Some(repo) = group.get_own_repo().await {
                         if let Err(err) = repo.update_route_on_dht().await {
                             eprintln!(
                                 "Unable to update route after rebuild in group {} in repo {}: {}",
@@ -205,7 +205,7 @@ impl Backend {
                 let inner = inner.lock().await;
 
                 for group in inner.groups.clone().into_values() {
-                    if let Some(repo) = group.get_own_repo() {
+                    if let Some(repo) = group.get_own_repo().await {
                         if let Err(err) = repo.update_route_on_dht().await {
                             eprintln!(
                                 "Unable to update route after rebuild in group {} in repo {}: {}",
