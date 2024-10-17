@@ -245,13 +245,20 @@ impl Repo {
     }
 
     pub async fn list_files(&self) -> Result<Vec<String>> {
-        let collection_hash = if !self.can_write() {
-            self.get_hash_from_dht().await?
+        if self.can_write() {
+            let hash = self.get_or_create_collection().await?;
+            self.list_files_from_collection_hash(&hash).await
         } else {
-            self.get_or_create_collection().await?
-        };
+            let got_hash = self.get_hash_from_dht().await;
 
-        self.list_files_from_collection_hash(&collection_hash).await
+            // Return empty list if we can't fetch from the DHT
+            if got_hash.is_err() {
+                Ok(Vec::new())
+            } else {
+                self.list_files_from_collection_hash(&got_hash.unwrap())
+                    .await
+            }
+        }
     }
 
     pub async fn list_files_from_collection_hash(
