@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::{io::ErrorKind, path::PathBuf};
 use tokio::sync::{broadcast, mpsc};
+use tokio_stream::wrappers::ReceiverStream;
 use veilid_core::{
     CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, ProtectedStore, RoutingContext,
     SharedSecret, Target, VeilidAPI, VeilidUpdate,
@@ -75,14 +76,6 @@ impl Repo {
         Ok(())
     }
 
-    pub fn file_names(&self) -> Result<Vec<String>> {
-        unimplemented!("WIP")
-    }
-
-    pub async fn has_file(&self, file_name: &str) -> Result<bool> {
-        unimplemented!("WIP")
-    }
-
     pub async fn has_hash(&self, hash: &Hash) -> Result<bool> {
         if self.can_write() {
             Ok(self.iroh_blobs.has_hash(hash).await)
@@ -108,21 +101,17 @@ impl Repo {
         Ok(value)
     }
 
-    pub async fn get_file_stream(&self, file_name: &str) -> Result<impl Stream<Item = Vec<u8>>> {
-        let s = stream! {
-            let mut vec: Vec<u8> = Vec::new();
-            yield vec;
-        };
+    pub async fn get_file_stream(
+        &self,
+        file_name: &str,
+    ) -> Result<impl Stream<Item = std::io::Result<Bytes>>> {
+        let hash = self.get_file_hash(file_name).await?;
+        // download the blob
+        let receiver = self.iroh_blobs.read_file(hash.clone()).await?;
 
-        Ok(s)
-    }
+        let stream = ReceiverStream::new(receiver);
 
-    pub async fn download_all(&self) -> Result<()> {
-        // Get hash from dht
-        // Download collection
-        // Iterate through hahses in collection
-        // Download
-        unimplemented!("WIP")
+        Ok(stream)
     }
 
     pub async fn update_hash_on_dht(&self, hash: &Hash) -> Result<()> {

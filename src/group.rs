@@ -175,7 +175,7 @@ impl Group {
         &self,
         hash: &Hash,
     ) -> Result<mpsc::Receiver<std::io::Result<Bytes>>> {
-        if self.has_hash(hash).await? {
+        if !self.has_hash(hash).await? {
             self.download_hash_from_peers(hash).await?
         }
 
@@ -296,7 +296,7 @@ impl Group {
             iroh_blobs: self.iroh_blobs.clone(),
         };
 
-        self.add_repo(repo.clone());
+        self.add_repo(repo.clone()).await?;
 
         Ok(repo)
     }
