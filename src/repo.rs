@@ -178,29 +178,27 @@ impl Repo {
 
     // Method to get or create a collection associated with the repo
     async fn get_or_create_collection(&self) -> Result<Hash> {
-        // If the repo is writable, check if the collection exists
-        if self.can_write() {
-            let collection_name = self.get_name().await?;
-            if let Ok(collection_hash) = self.iroh_blobs.collection_hash(&collection_name).await {
-                // Collection exists, return the hash
-                println!("Collection hash found in store: {:?}", collection_hash);
+        if !self.can_write() {
+            // Try to get the collection hash from the DHT (remote or unwritable repos)
+            if let Ok(collection_hash) = self.get_hash_from_dht().await {
+                // The collection hash is found, return it directly (no need for a name)
+                println!("Collection hash found in DHT: {:?}", collection_hash);
                 return Ok(collection_hash);
             } else {
-                println!("Collection not found in store, checking DHT...");
+                // Error if we're trying to create a collection in a read-only repo
+                return Err(anyhow::Error::msg(
+                    "Collection not found and cannot create in read-only repo",
+                ));
             }
         }
-
-        // Try to get the collection hash from the DHT (remote or unwritable repos)
-        if let Ok(collection_hash) = self.get_hash_from_dht().await {
-            // The collection hash is found, return it directly (no need for a name)
-            println!("Collection hash found in DHT: {:?}", collection_hash);
+        // If the repo is writable, check if the collection exists
+        let collection_name = self.get_name().await?;
+        if let Ok(collection_hash) = self.iroh_blobs.collection_hash(&collection_name).await {
+            // Collection exists, return the hash
+            println!("Collection hash found in store: {:?}", collection_hash);
             return Ok(collection_hash);
-        }
-
-        // If it's a writable repo and no collection exists, create a new collection
-        if self.can_write() {
+        } else {
             // Create a new collection
-            let collection_name = self.get_name().await?;
             println!("Creating new collection...");
             let new_hash = match self.iroh_blobs.create_collection(&collection_name).await {
                 Ok(hash) => {
@@ -213,11 +211,6 @@ impl Repo {
                 }
             };
 
-            // Persist the collection with the name
-            self.iroh_blobs
-                .persist_collection_with_name(&collection_name, &new_hash)
-                .await?;
-
             // Update the DHT with the new collection hash
             if let Err(e) = self.update_collection_on_dht().await {
                 eprintln!("Failed to update DHT: {:?}", e);
@@ -227,10 +220,6 @@ impl Repo {
             // Return the new collection hash
             return Ok(new_hash);
         }
-        // Error if we're trying to create a collection in a read-only repo
-        Err(anyhow::Error::msg(
-            "Collection not found and cannot create in read-only repo",
-        ))
     }
 
     // Method to retrieve a file's hash from the collection
