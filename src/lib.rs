@@ -828,7 +828,10 @@ mod tests {
             .create_group()
             .await
             .expect("Unable to create group");
+
         let mut peer_repo = group.create_repo().await?;
+
+        let group2 = backend2.join_from_url(&group.get_url()).await?;
 
         // Upload a test blob to the peer repo
         let data_to_upload = Bytes::from("Test data for peer download");
@@ -864,8 +867,6 @@ mod tests {
         );
 
         sleep(Duration::from_secs(1)).await;
-
-        let group2 = backend2.join_from_url(&group.get_url()).await?;
 
         // Download hash from peers
         group2.download_hash_from_peers(&file_hash).await?;
