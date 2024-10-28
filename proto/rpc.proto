@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package rpc;
+
+service Rpc {
+    rpc ReplicateGroup (ReplicateGroupRequest) returns (ReplicateGroupResponse);
+}
+
+message ReplicateGroupRequest {
+    string group_id = 1;
+}
+
+message ReplicateGroupResponse {
+    string status_message = 1;
+}
