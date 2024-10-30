@@ -80,8 +80,7 @@ impl Group {
             .lock()
             .await
             .get(id)
-            .ok_or_else(|| anyhow!("Repo not loaded"))
-            .map(|repo| repo.clone())
+            .ok_or_else(|| anyhow!("Repo not loaded")).cloned()
     }
 
     pub async fn has_repo(&self, id: &CryptoKey) -> bool {
@@ -122,7 +121,7 @@ impl Group {
         let mut repos = self.list_peer_repos().await;
         repos.shuffle(&mut rng);
 
-        if repos.len() == 0 {
+        if repos.is_empty() {
             return Err(anyhow!("Cannot download hash. No other peers found"));
         }
 
@@ -338,9 +337,9 @@ impl Group {
     pub async fn try_load_repo_from_disk(&mut self) -> bool {
         if let Err(err) = self.load_repo_from_disk().await {
             eprintln!("Unable to load own repo from disk {}", err);
-            return false;
+            false
         } else {
-            return true;
+            true
         }
     }
 
@@ -429,7 +428,7 @@ impl Group {
         let keypair = CommonKeypair {
             id: repo.id(),
             public_key: repo_dht_record.owner().clone(),
-            secret_key: repo_dht_record.owner_secret().map(|key| *key),
+            secret_key: repo_dht_record.owner_secret().copied(),
             encryption_key: encryption_key.clone(),
         };
 
