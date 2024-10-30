@@ -4,10 +4,10 @@ use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get the current directory
-    let default_dir = env::current_dir().expect("Failed to get current directory");
+    let current_dir = env::current_dir()?;
 
-    // Set the path for descriptor.bin to be inside current directory
-    let descriptor_path = default_dir.join("descriptor.bin");
+    // Define the path for descriptor.bin in the current directory
+    let descriptor_path = current_dir.join("descriptor.bin");
 
     // Configure tonic_build
     tonic_build::configure()
