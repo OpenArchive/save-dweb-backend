@@ -1,16 +1,18 @@
 use crate::backend::Backend;
-use crate::common::DHTEntity;
+use crate::common::{DHTEntity, CommonKeypair};
 use crate::group::Group;
 use crate::repo::Repo;
 
 use std::convert::TryInto;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::fs;
+use tonic::async_trait;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use anyhow::Result;
 use tracing::{error, info};
-use veilid_core::CryptoKey;
+use veilid_core::{
+    CryptoKey, CryptoSystem, CryptoSystemVLD0, DHTRecordDescriptor, RoutingContext, SharedSecret, VeilidAPI,
+};
 use anyhow::anyhow;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -19,39 +21,104 @@ use iroh_blobs::Hash;
 
 use tonic_reflection::server::Builder;
 
-pub mod rpc {
-    tonic::include_proto!("rpc");
-
-    pub const FILE_DESCRIPTOR_SET: &[u8] =
-    tonic::include_file_descriptor_set!("descriptor");
-}
+tonic::include_proto!("rpc");
+pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("../descriptor.bin");
 
 pub struct RpcService {
-    backend: Arc<Mutex<Backend>>,
+    backend: Backend,
+    keypair: CommonKeypair,
+    routing_context: RoutingContext,
+    crypto_system: CryptoSystemVLD0,
+    dht_record: DHTRecordDescriptor,
 }
 
-pub async fn start_rpc_server(backend: Arc<Mutex<Backend>>, addr: &str) -> Result<()> {
-    let rpc_service = RpcService { backend };
+impl RpcService {
+    async fn get_group(&self) -> Result<Group> {
+        let group_key = self.keypair.id.clone();
+        let boxed_group = self.backend.get_group(&group_key).await.map_err(|e| {
+            error!("Failed to get group: {}", e);
+            anyhow!("Failed to get group: {}", e)
+        })?;
+        Ok(*boxed_group)
+    }
+}
+
+
+pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
+    // Create a new group
+    let group = backend.create_group().await?;
+    let dht_record = group.get_dht_record().clone(); 
+
+    // Output group key and secret key
+    println!(
+        "Record Key: {:?}",
+        group.id()
+    );
+    println!(
+        "Secret Key: {:?}",
+        group.get_secret_key().unwrap()
+    );
+
+    // Persist group keys to the protected store
+    let group_id = group.id();
+    let secret_key = group.get_secret_key().unwrap();
+    let encryption_key = group.get_encryption_key();
+
+    let keys = format!("{}\n{}\n{}", group_id, secret_key, encryption_key);
+
+    // Write keys to file
+    let base_dir = std::env::current_dir().expect("Failed to get current directory");
+    let keys_path = base_dir.join("group_keys.txt");
+    fs::write(&keys_path, keys).expect("Failed to write group keys to disk");
+
+    println!("Group keys persisted to {:?}", keys_path);
+
+    // Initialize keypair
+    let keypair = CommonKeypair {
+        id: group_id.clone(),
+        public_key: group_id.clone(), // Public key is the same as the group ID?
+        secret_key: Some(secret_key.clone()),
+        encryption_key: encryption_key.clone(),
+    };
+
+    // Get routing_context and crypto_system
+    let routing_context = backend
+        .get_routing_context()
+        .await
+        .ok_or_else(|| anyhow!("Failed to get routing context"))?;
+    let veilid_api = backend
+        .get_veilid_api()
+        .await
+        .ok_or_else(|| anyhow!("Failed to get veilid API"))?;
+    let crypto_system = CryptoSystemVLD0::new(veilid_api.crypto().unwrap());
+
+    let rpc_service = RpcService {
+        backend,
+        keypair,
+        routing_context: routing_context.clone(),
+        crypto_system,
+        dht_record,
+    };
 
     // Build the reflection service
     let reflection_service = Builder::configure()
-       .register_encoded_file_descriptor_set(rpc::FILE_DESCRIPTOR_SET)
-       .build_v1()?;
+        .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+        .build_v1()?;
 
     Server::builder()
-        .add_service(rpc::rpc_server::RpcServer::new(rpc_service))
-        .add_service(reflection_service) 
+        .add_service(rpc_server::RpcServer::new(rpc_service))
+        .add_service(reflection_service)
         .serve(addr.parse()?)
         .await?;
     Ok(())
 }
 
 #[tonic::async_trait]
-impl rpc::rpc_server::Rpc for RpcService {
+impl rpc_server::Rpc for RpcService {
     async fn replicate_group(
         &self,
-        request: Request<rpc::ReplicateGroupRequest>,
-    ) -> Result<Response<rpc::ReplicateGroupResponse>, Status> {
+        request: Request<ReplicateGroupRequest>,
+    ) -> Result<Response<ReplicateGroupResponse>, Status> {
         let group_id = request.into_inner().group_id;
         info!("Replicating group with ID: {}", group_id);
 
@@ -69,7 +136,7 @@ impl rpc::rpc_server::Rpc for RpcService {
 
         let group_key = CryptoKey::new(group_bytes);
 
-        let backend = self.backend.lock().await;
+        let backend = self.backend.clone();
         let group = backend.get_group(&group_key).await.map_err(|e| {
             error!("Failed to get group: {}", e);
             Status::not_found(format!("Group not found: {}", e))
@@ -94,8 +161,54 @@ impl rpc::rpc_server::Rpc for RpcService {
         }
 
         info!("Successfully replicated group: {}", group_id);
-        Ok(Response::new(rpc::ReplicateGroupResponse {
+        Ok(Response::new(ReplicateGroupResponse {
             status_message: format!("Successfully replicated group: {}", group_id),
+        }))
+    }
+
+    async fn list_groups(
+        &self,
+        _request: tonic::Request<ListGroupsRequest>,
+    ) -> Result<tonic::Response<ListGroupsResponse>, tonic::Status> {
+        let backend = self.backend.clone();
+        let groups = backend.list_groups().await.map_err(|e| {
+            error!("Failed to list groups: {}", e);
+            Status::internal(format!("Failed to list groups: {}", e))
+        })?;
+
+        let group_ids: Vec<String> = groups.iter().map(|g| g.id().to_string()).collect();
+
+        Ok(Response::new(ListGroupsResponse { group_ids }))
+    }
+
+    async fn remove_group(
+        &self,
+        request: tonic::Request<RemoveGroupRequest>,
+    ) -> Result<tonic::Response<RemoveGroupResponse>, tonic::Status> {
+        let group_id = request.into_inner().group_id;
+        info!("Removing group with ID: {}", group_id);
+
+        let group_bytes = URL_SAFE_NO_PAD.decode(&group_id).map_err(|_| {
+            error!("Invalid group ID encoding");
+            Status::invalid_argument("Invalid group ID encoding")
+        })?;
+
+        let group_bytes: [u8; 32] = group_bytes.try_into().map_err(|_| {
+            error!("Invalid group key length");
+            Status::invalid_argument("Invalid group key length")
+        })?;
+
+        let group_key = CryptoKey::new(group_bytes);
+
+        let backend = self.backend.clone();
+        backend.close_group(group_key).await.map_err(|e| {
+            error!("Failed to remove group: {}", e);
+            Status::internal(format!("Failed to remove group: {}", e))
+        })?;
+
+        info!("Successfully removed group: {}", group_id);
+        Ok(Response::new(RemoveGroupResponse {
+            status_message: format!("Successfully removed group: {}", group_id),
         }))
     }
 }
@@ -117,16 +230,21 @@ async fn replicate_repo(group: &Group, repo: &Repo) -> Result<(), anyhow::Error>
         info!("Processing file: {}", file_name);
 
         let file_hash = repo.get_file_hash(&file_name).await?;
-        if !repo.can_write() {
-            if !group.has_hash(&file_hash).await? {
-                // Use our custom function here as well
-                download(group, &file_hash).await?;
-            }
+        if !repo.can_write() && !group.has_hash(&file_hash).await? {
+            // Use our custom function here as well
+            download(group, &file_hash).await?;
         }
 
-        // Attempt to retrieve the file data stream
-        let _file_data = repo.get_file_stream(&file_name).await?;
-        info!("Successfully replicated file: {}", file_name);
+        // Attempt to retrieve the file using download_file_from
+        if let Ok(route_id_blob) = repo.get_route_id_blob().await {
+            group
+                .iroh_blobs
+                .download_file_from(route_id_blob, &file_hash)
+                .await?;
+            info!("Successfully replicated file: {}", file_name);
+        } else {
+            error!("Failed to get route ID blob for file: {}", file_name);
+        }
     }
 
     Ok(())
@@ -163,4 +281,43 @@ async fn download(group: &Group, hash: &Hash) -> Result<()> {
     }
 
     Err(anyhow!("Unable to download from any peer"))
+}
+
+
+
+
+impl DHTEntity for RpcService {
+    async fn set_name(&self, name: &str) -> Result<()> {
+        let routing_context = self.get_routing_context();
+        let key = self.get_dht_record().key().clone();
+        let encrypted_name = self.encrypt_aead(name.as_bytes(), None)?;
+        routing_context
+            .set_dht_value(key, 0, encrypted_name, None)
+            .await?;
+        Ok(())
+    }
+
+    fn get_id(&self) -> CryptoKey {
+        self.keypair.id.clone()
+    }
+
+    fn get_secret_key(&self) -> Option<CryptoKey> {
+        self.keypair.secret_key.clone()
+    }
+
+    fn get_encryption_key(&self) -> SharedSecret {
+        self.keypair.encryption_key.clone()
+    }
+
+    fn get_dht_record(&self) -> DHTRecordDescriptor {
+        self.dht_record.clone()
+    }
+    
+    fn get_routing_context(&self) -> RoutingContext {
+        self.routing_context.clone()
+    }
+
+    fn get_crypto_system(&self) -> CryptoSystemVLD0 {
+        self.crypto_system.clone()
+    }
 }

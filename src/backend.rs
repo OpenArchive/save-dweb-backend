@@ -85,6 +85,7 @@ impl BackendInner {
     }
 }
 
+#[derive(Clone)]
 pub struct Backend {
     inner: Arc<Mutex<BackendInner>>,
 }
@@ -480,6 +481,11 @@ impl Backend {
     pub async fn get_iroh_blobs(&self) -> Option<VeilidIrohBlobs> {
         let mut inner = self.inner.lock().await;
         inner.iroh_blobs.clone()
+    }
+
+    pub async fn get_routing_context(&self) -> Option<RoutingContext> {
+        let veilid_api = self.get_veilid_api().await?;
+        veilid_api.routing_context().ok()
     }
 }
 
