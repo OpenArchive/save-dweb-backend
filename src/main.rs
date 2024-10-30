@@ -19,6 +19,9 @@ mod group;
 mod repo;
 mod rpc;
 
+use rpc::rpc_server::RpcServer;
+use rpc::start_rpc_server;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let matches = Command::new("Save DWeb Backend")
@@ -77,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
         backend.start().await?;
 
         // Start the RPC server with the backend
-        rpc::start_rpc_server(backend.clone(), rpc_addr).await?;
+        start_rpc_server(backend.clone(), rpc_addr).await?;
 
     } else {
         // Otherwise, start the normal backend and group operations
