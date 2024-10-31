@@ -831,6 +831,8 @@ mod tests {
 
         let mut peer_repo = group.create_repo().await?;
 
+        sleep(Duration::from_secs(1)).await;
+
         let group2 = backend2.join_from_url(&group.get_url()).await?;
 
         // Upload a test blob to the peer repo
@@ -962,6 +964,8 @@ mod tests {
             !new_file_collection_hash.as_bytes().is_empty(),
             "New collection hash after uploading a file should not be empty"
         );
+
+        sleep(Duration::from_secs(4)).await;
 
         let joined_group = backend2
             .join_from_url(&group1.get_url())

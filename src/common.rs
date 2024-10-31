@@ -20,7 +20,7 @@ pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
             .new_custom_private_route(
                 &VALID_CRYPTO_KINDS,
                 Stability::Reliable,
-                Sequencing::PreferOrdered,
+                Sequencing::EnsureOrdered,
             )
             .await;
 

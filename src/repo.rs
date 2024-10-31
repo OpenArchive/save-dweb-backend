@@ -225,9 +225,8 @@ impl Repo {
     // Method to retrieve a file's hash from the collection
     pub async fn get_file_hash(&self, file_name: &str) -> Result<Hash> {
         // Ensure the collection exists before reading
-        self.get_or_create_collection().await?;
+        let collection_hash = self.get_or_create_collection().await?;
 
-        let collection_hash = self.get_collection_hash().await?;
         self.iroh_blobs
             .get_file_from_collection_hash(&collection_hash, file_name)
             .await
