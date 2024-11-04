@@ -31,3 +31,13 @@ message RemoveGroupRequest {
 message RemoveGroupResponse {
     string status_message = 1;
 }
+
+message AppCallRequest {
+    string command = 1;      
+    string payload = 2;     
+}
+
+message AppCallResponse {
+    bool success = 1;        
+    string message = 2;     
+}
