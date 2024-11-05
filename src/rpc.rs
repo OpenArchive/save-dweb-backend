@@ -8,15 +8,17 @@ use std::fs;
 use tonic::async_trait;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
+use tokio::sync::broadcast::error::RecvError;
+use futures::StreamExt;
 use anyhow::Result;
 use tracing::{error, info};
 use veilid_core::{
-    CryptoKey, CryptoSystem, CryptoSystemVLD0, DHTRecordDescriptor, RoutingContext, SharedSecret, VeilidAPI,
+    CryptoKey, CryptoSystem, CryptoSystemVLD0, DHTRecordDescriptor, RoutingContext, SharedSecret, VeilidAPI, VeilidUpdate, VeilidAppCall, VeilidState,
 };
 use anyhow::anyhow;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-
+use prost::Message;
 use iroh_blobs::Hash;
 
 use tonic_reflection::server::Builder;
@@ -24,6 +26,7 @@ use tonic_reflection::server::Builder;
 tonic::include_proto!("rpc");
 pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("../descriptor.bin");
 
+#[derive(Clone)]
 pub struct RpcService {
     backend: Backend,
     keypair: CommonKeypair,
@@ -339,11 +342,11 @@ impl rpc_server::Rpc for RpcService {
 }
 
 async fn replicate_repo(group: &Group, repo: &Repo) -> Result<(), anyhow::Error> {
-    // If the repo is not writable, attempt to download it.
+    // If the repo is not writable, attempt to download the entire collection.
     if !repo.can_write() {
         let collection_hash = repo.get_hash_from_dht().await?;
         if !group.has_hash(&collection_hash).await? {
-            // Use our custom function instead
+            // Use our custom function for downloading the collection from peers
             download(group, &collection_hash).await?;
         }
     }
@@ -355,11 +358,12 @@ async fn replicate_repo(group: &Group, repo: &Repo) -> Result<(), anyhow::Error>
         info!("Processing file: {}", file_name);
 
         let file_hash = repo.get_file_hash(&file_name).await?;
+
+        // If the repo is not writable and the file hash is not found in the group, attempt to download it.
         if !repo.can_write() && !group.has_hash(&file_hash).await? {
-            // Use our custom function here as well
+            
             download(group, &file_hash).await?;
         }
-
         // Attempt to retrieve the file using download_file_from
         if let Ok(route_id_blob) = repo.get_route_id_blob().await {
             group
@@ -376,7 +380,6 @@ async fn replicate_repo(group: &Group, repo: &Repo) -> Result<(), anyhow::Error>
 }
 
 async fn download(group: &Group, hash: &Hash) -> Result<()> {
-    // Use `list_repos` instead of `list_peer_repos` to avoid `ThreadRng`
     let repo_keys: Vec<CryptoKey> = group.list_repos().await;
 
     if repo_keys.is_empty() {
