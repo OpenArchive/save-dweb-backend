@@ -171,12 +171,15 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
         group.get_secret_key().unwrap()
     );
 
+    let dht_record = group.get_dht_record().clone();
+
     // Persist group keys to the protected store
     let group_id = group.id();
     let secret_key = group.get_secret_key().unwrap();
     let encryption_key = group.get_encryption_key();
 
     let keys = format!("{}\n{}\n{}", group_id, secret_key, encryption_key);
+
 
     // Write keys to file
     let base_dir = std::env::current_dir().expect("Failed to get current directory");
@@ -185,13 +188,20 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
 
     println!("Group keys persisted to {:?}", keys_path);
 
+    let protected_store = backend.get_protected_store().await.unwrap();
+
     // Initialize keypair
     let keypair = CommonKeypair {
         id: group_id.clone(),
-        public_key: group_id.clone(), // Public key is the same as the group ID?
+        public_key: dht_record.owner().clone(),
         secret_key: Some(secret_key.clone()),
         encryption_key: encryption_key.clone(),
     };
+
+    keypair
+    .store_keypair(&protected_store)
+    .await
+    .map_err(|e| anyhow!(e))?;
 
     // Get routing_context and crypto_system
     let routing_context = backend
