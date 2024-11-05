@@ -10,10 +10,12 @@ use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use tokio::sync::broadcast::error::RecvError;
 use futures::StreamExt;
+use tokio::fs::File;
+use tokio::io::{self, AsyncBufReadExt, BufReader};
 use anyhow::Result;
 use tracing::{error, info};
 use veilid_core::{
-    CryptoKey, CryptoSystem, CryptoSystemVLD0, DHTRecordDescriptor, RoutingContext, SharedSecret, VeilidAPI, VeilidUpdate, VeilidAppCall, VeilidState,
+    CryptoKey, CryptoSystem, CryptoSystemVLD0, CRYPTO_KEY_LENGTH, DHTRecordDescriptor, RoutingContext, SharedSecret, VeilidAPI, VeilidUpdate, VeilidAppCall, VeilidState,
 };
 use anyhow::anyhow;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -160,19 +162,55 @@ impl RpcService {
 
 
 pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
-    // Create a new group
-    let group = backend.create_group().await?;
-    let dht_record = group.get_dht_record().clone(); 
+    // Path to the keys file
+    let base_dir = std::env::current_dir().expect("Failed to get current directory");
+    let keys_path = base_dir.join("group_keys.txt");
 
-    // Output group key and secret key
-    println!(
-        "Record Key: {:?}",
-        group.id()
-    );
-    println!(
-        "Secret Key: {:?}",
-        group.get_secret_key().unwrap()
-    );
+    // Check if group_keys.txt exists and load keys if it does
+    let group = if keys_path.exists() {
+        println!("Found existing group_keys.txt, loading group.");
+
+        // Read keys from the file
+        let keys_file = File::open(&keys_path).await.expect("Failed to open group_keys.txt");
+        let mut lines = BufReader::new(keys_file).lines();
+
+        // Extract group_id, secret_key, and encryption_key
+        let group_id = lines.next_line().await?.ok_or_else(|| anyhow!("Missing group ID"))?;
+        let secret_key = lines.next_line().await?.ok_or_else(|| anyhow!("Missing secret key"))?;
+        let encryption_key = lines.next_line().await?.ok_or_else(|| anyhow!("Missing encryption key"))?;
+
+        // Transform Key string into CryptoKey
+        let bytes = hex::decode(group_id)?;
+        let mut key_vec = [0u8; CRYPTO_KEY_LENGTH];
+        key_vec.copy_from_slice(&bytes);
+
+        // Convert the byte array to a CryptoKey
+        let record_key = CryptoKey::new(key_vec); 
+
+        // Use the Backend's `load_group` method to initialize with these keys
+        backend.get_group(&record_key).await?
+    } else {
+        println!("No group_keys.txt found, creating a new group.");
+
+        // Create a new group
+        let new_group = backend.create_group().await?;
+        
+        // Output group key and secret key
+        println!("Record Key: {:?}", new_group.id());
+        println!("Secret Key: {:?}", new_group.get_secret_key().unwrap());
+
+        // Persist group keys to the protected store
+        let group_id = new_group.id();
+        let secret_key = new_group.get_secret_key().unwrap();
+        let encryption_key = new_group.get_encryption_key();
+        let keys = format!("{}\n{}\n{}", group_id, secret_key, encryption_key);
+
+        // Write keys to file
+        fs::write(&keys_path, keys).expect("Failed to write group keys to disk");
+        println!("Group keys persisted to {:?}", keys_path);
+
+        Box::new(new_group)
+    };
 
     let dht_record = group.get_dht_record().clone();
 
