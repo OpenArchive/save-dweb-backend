@@ -97,7 +97,7 @@ pub fn config_for_dir(base_dir: PathBuf, namespace: String) -> VeilidConfigInner
     };
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct CommonKeypair {
     pub id: CryptoKey,
     pub public_key: CryptoKey,
