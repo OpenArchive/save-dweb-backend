@@ -41,6 +41,57 @@ impl RpcService {
         })?;
         Ok(*boxed_group)
     }
+    /// Start listening for AppCall events.
+    pub async fn start_update_listener(&self) -> Result<()> {
+        // Subscribe to updates from the backend
+        let mut update_rx = self
+            .backend
+            .subscribe_updates()
+            .await
+            .ok_or_else(|| anyhow!("Failed to subscribe to updates"))?;
+
+        // Listen for incoming updates and handle AppCall
+        loop {
+            match update_rx.recv().await {
+                Ok(update) => {
+                    match update {
+                        VeilidUpdate::AppCall(app_call) => {
+                            // Attempt to parse the app_call message with Protocol Buffers
+                            let parsed_call = AppCallRequest::decode(app_call.message());
+                            
+                            match parsed_call {
+                                Ok(request) => {
+                                    // Process the parsed AppCall
+                                    if let Err(e) = self.process_app_call(request).await {
+                                        error!("Error processing AppCall: {}", e);
+                                    }
+                                }
+                                Err(parse_err) => {
+                                    // Log the parse error and skip handling this AppCall
+                                    error!("Failed to parse AppCall message: {}", parse_err);
+                                }
+                            }
+                        }
+                        _ => {
+                            // Handle other updates
+                            // TO DO: If the hash has changed, download the new file
+                        }
+                    }
+                }
+                Err(RecvError::Lagged(count)) => {
+                    error!("Missed {} updates", count);
+                    // Decide how to handle missed updates
+                }
+                Err(RecvError::Closed) => {
+                    error!("Update channel closed");
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
 }
 
 
