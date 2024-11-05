@@ -222,6 +222,9 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
         dht_record,
     };
 
+    // Start the update listener
+    rpc_service.start_update_listener().await?;
+
     // Build the reflection service
     let reflection_service = Builder::configure()
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
