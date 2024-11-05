@@ -135,6 +135,24 @@ impl RpcService {
         Ok(())
     }
     
+
+    /// Process the AppCallRequest and generate a response
+    async fn process_app_call(&self, request: AppCallRequest) -> Result<AppCallResponse, anyhow::Error> {
+        match request.command.as_str() {
+            "ping" => Ok(AppCallResponse {
+                success: true,
+                message: "pong".to_string(),
+            }),
+            "echo" => Ok(AppCallResponse {
+                success: true,
+                message: request.payload,
+            }),
+            _ => Ok(AppCallResponse {
+                success: false,
+                message: format!("Unknown command: {}", request.command),
+            }),
+        }
+    }
 }
 
 
