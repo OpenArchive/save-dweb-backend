@@ -92,6 +92,49 @@ impl RpcService {
         Ok(())
     }
 
+
+    async fn handle_app_call(&self, app_call: VeilidAppCall) -> Result<()> {
+        let call_id = app_call.id();
+        let message = app_call.message();
+    
+        // Attempt to parse the message with Protocol Buffers
+        let app_call_request = AppCallRequest::decode(message);
+        let response = match app_call_request {
+            Ok(request) => {
+                info!("Received AppCall with command: {}", request.command);
+                self.process_app_call(request).await
+            }
+            Err(err) => {
+                error!("Failed to parse AppCall message: {}", err);
+                Ok(AppCallResponse {
+                    success: false,
+                    message: "Invalid AppCall message format".to_string(),
+                })
+            }
+        };
+    
+        // Encode the AppCallResponse
+        let mut buf = Vec::new();
+        response?.encode(&mut buf).map_err(|e| {
+            error!("Failed to encode AppCallResponse: {}", e);
+            anyhow!("Failed to encode AppCallResponse: {}", e)
+        })?;
+    
+        // Send the response using VeilidAPI's app_call_reply
+        self.backend
+            .get_veilid_api()
+            .await
+            .ok_or_else(|| anyhow!("Veilid API not available"))?
+            .app_call_reply(call_id, buf)
+            .await
+            .map_err(|e| {
+                error!("Failed to send AppCall reply: {}", e);
+                anyhow!("Failed to send AppCall reply: {}", e)
+            })?;
+    
+        Ok(())
+    }
+    
 }
 
 
