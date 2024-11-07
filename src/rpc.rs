@@ -15,7 +15,7 @@ use tokio::io::{self, AsyncBufReadExt, BufReader};
 use anyhow::Result;
 use tracing::{error, info};
 use veilid_core::{
-    CryptoKey, CryptoSystem, CryptoSystemVLD0, CRYPTO_KEY_LENGTH, DHTRecordDescriptor, RoutingContext, SharedSecret, VeilidAPI, VeilidUpdate, VeilidAppCall, VeilidState,
+    CryptoKey, CryptoSystem, CryptoSystemVLD0, CRYPTO_KEY_LENGTH, DHTRecordDescriptor, RoutingContext, SharedSecret, VeilidAPI, VeilidUpdate, VeilidAppCall, VeilidState, DHTSchema, CRYPTO_KIND_VLD0, vld0_generate_keypair, 
 };
 use anyhow::anyhow;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -167,7 +167,7 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
     let keys_path = base_dir.join("group_keys.txt");
 
     // Check if group_keys.txt exists and load keys if it does
-    let group = if keys_path.exists() {
+    if keys_path.exists() {
         println!("Found existing group_keys.txt, loading group.");
 
         // Read keys from the file
@@ -188,41 +188,49 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
         let record_key = CryptoKey::new(key_vec); 
 
         // Use the Backend's `load_group` method to initialize with these keys
-        backend.get_group(&record_key).await?
+        backend.get_group(&record_key).await?;
     } else {
-        println!("No group_keys.txt found, creating a new group.");
+        println!("No group_keys.txt found, loading known groups.");
 
-        // Write keys to file
-        fs::write(&keys_path, keys).expect("Failed to write group keys to disk");
-        println!("Group keys persisted to {:?}", keys_path);
-
-        Box::new(new_group)
+        // Load known groups from the backend
+        backend.load_known_groups().await?;
     };
 
-    let dht_record = group.get_dht_record().clone();
-
-    // Persist group keys to the protected store
-    let group_id = group.id();
-    let secret_key = group.get_secret_key().unwrap();
-    let encryption_key = group.get_encryption_key();
-
-    let keys = format!("{}\n{}\n{}", group_id, secret_key, encryption_key);
-
-
     // Write keys to file
-    let base_dir = std::env::current_dir().expect("Failed to get current directory");
-    let keys_path = base_dir.join("group_keys.txt");
-    fs::write(&keys_path, keys).expect("Failed to write group keys to disk");
+    // Question: which keys should be loaded here?
+    //let base_dir = std::env::current_dir().expect("Failed to get current directory");
+    //let keys_path = base_dir.join("group_keys.txt");
+    //fs::write(&keys_path, keys).expect("Failed to write group keys to disk");
 
-    println!("Group keys persisted to {:?}", keys_path);
+    //println!("Group keys persisted to {:?}", keys_path);
 
     let protected_store = backend.get_protected_store().await.unwrap();
 
+    // Create the DHT Record for the RPC service
+    let routing_context = backend
+    .get_routing_context()
+    .await
+    .ok_or_else(|| anyhow!("Failed to get routing context"))?;
+    let schema = DHTSchema::dflt(65)?; // 64 members + a title
+    let kind = Some(CRYPTO_KIND_VLD0);
+
+    let dht_record = routing_context.create_dht_record(schema, kind).await?;
+    let keypair = vld0_generate_keypair();
+
+    let veilid_api = backend
+        .get_veilid_api()
+        .await
+        .ok_or_else(|| anyhow!("Failed to get veilid API"))?;
+    // Get crypto_system
+    let crypto_system = CryptoSystemVLD0::new(veilid_api.crypto().unwrap());
+    
+    let encryption_key = crypto_system.random_shared_secret();
+
     // Initialize keypair
     let keypair = CommonKeypair {
-        id: group_id.clone(),
+        id: dht_record.key().value.clone(),
         public_key: dht_record.owner().clone(),
-        secret_key: Some(secret_key.clone()),
+        secret_key: Some(keypair.secret.clone()),
         encryption_key: encryption_key.clone(),
     };
 
@@ -230,17 +238,6 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
     .store_keypair(&protected_store)
     .await
     .map_err(|e| anyhow!(e))?;
-
-    // Get routing_context and crypto_system
-    let routing_context = backend
-        .get_routing_context()
-        .await
-        .ok_or_else(|| anyhow!("Failed to get routing context"))?;
-    let veilid_api = backend
-        .get_veilid_api()
-        .await
-        .ok_or_else(|| anyhow!("Failed to get veilid API"))?;
-    let crypto_system = CryptoSystemVLD0::new(veilid_api.crypto().unwrap());
 
     let rpc_service = RpcService {
         backend,
