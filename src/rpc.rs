@@ -192,19 +192,6 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
     } else {
         println!("No group_keys.txt found, creating a new group.");
 
-        // Create a new group
-        let new_group = backend.create_group().await?;
-        
-        // Output group key and secret key
-        println!("Record Key: {:?}", new_group.id());
-        println!("Secret Key: {:?}", new_group.get_secret_key().unwrap());
-
-        // Persist group keys to the protected store
-        let group_id = new_group.id();
-        let secret_key = new_group.get_secret_key().unwrap();
-        let encryption_key = new_group.get_encryption_key();
-        let keys = format!("{}\n{}\n{}", group_id, secret_key, encryption_key);
-
         // Write keys to file
         fs::write(&keys_path, keys).expect("Failed to write group keys to disk");
         println!("Group keys persisted to {:?}", keys_path);
