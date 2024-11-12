@@ -1,16 +1,18 @@
 #![allow(async_fn_in_trait)]
 #![allow(clippy::async_yields_async)]
 
-use crate::constants::ROUTE_ID_DHT_KEY;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, path::PathBuf, sync::Arc};
 use tokio::sync::broadcast::{self, Receiver};
+use url::Url;
 use veilid_core::{
     CryptoKey, CryptoSystem, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, KeyPair, Nonce,
     ProtectedStore, RouteId, RoutingContext, Sequencing, SharedSecret, Stability, UpdateCallback,
     VeilidAPI, VeilidConfigInner, VeilidUpdate, CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
 };
+
+use crate::constants::ROUTE_ID_DHT_KEY;
 
 pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
     let mut retries = 6;

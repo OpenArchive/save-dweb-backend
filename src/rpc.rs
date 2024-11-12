@@ -1,27 +1,36 @@
 use crate::backend::Backend;
-use crate::common::{DHTEntity, CommonKeypair};
+use crate::common::{CommonKeypair, DHTEntity};
 use crate::group::Group;
 use crate::repo::Repo;
+use crate::{
+    constants::ROUTE_ID_DHT_KEY,
+    group::{PROTOCOL_SCHEME, URL_DHT_KEY, URL_ENCRYPTION_KEY},
+};
 
+use anyhow::anyhow;
+use anyhow::Result;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
+use futures::StreamExt;
+use hex::ToHex;
+use iroh::net::discovery::pkarr::dht;
+use iroh_blobs::Hash;
+use prost::Message;
 use std::convert::TryInto;
 use std::fs;
+use tokio::fs::File;
+use tokio::io::{self, AsyncBufReadExt, BufReader};
+use tokio::sync::broadcast::error::RecvError;
 use tonic::async_trait;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
-use tokio::sync::broadcast::error::RecvError;
-use futures::StreamExt;
-use tokio::fs::File;
-use tokio::io::{self, AsyncBufReadExt, BufReader};
-use anyhow::Result;
 use tracing::{error, info};
+use url::Url;
 use veilid_core::{
-    CryptoKey, CryptoSystem, CryptoSystemVLD0, CRYPTO_KEY_LENGTH, DHTRecordDescriptor, RoutingContext, SharedSecret, VeilidAPI, VeilidUpdate, VeilidAppCall, VeilidState, DHTSchema, CRYPTO_KIND_VLD0, vld0_generate_keypair, 
+    vld0_generate_keypair, CryptoKey, CryptoSystem, CryptoSystemVLD0, DHTRecordDescriptor,
+    DHTSchema, RoutingContext, SharedSecret, VeilidAPI, VeilidAppCall, VeilidState, VeilidUpdate,
+    CRYPTO_KEY_LENGTH, CRYPTO_KIND_VLD0,
 };
-use anyhow::anyhow;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
-use prost::Message;
-use iroh_blobs::Hash;
 
 use tonic_reflection::server::Builder;
 
@@ -38,15 +47,53 @@ pub struct RpcService {
 }
 
 impl RpcService {
-    async fn get_group(&self) -> Result<Group> {
-        let group_key = self.keypair.id.clone();
-        let boxed_group = self.backend.get_group(&group_key).await.map_err(|e| {
-            error!("Failed to get group: {}", e);
-            anyhow!("Failed to get group: {}", e)
-        })?;
-        Ok(*boxed_group)
+    pub async fn from_backend(backend: &Backend) -> Result<Self> {
+        let backend = backend.clone();
+        let veilid = backend
+            .get_veilid_api()
+            .await
+            .ok_or_else(|| anyhow!("Backend not started"))?;
+
+        let routing_context = veilid.routing_context()?;
+        let schema = DHTSchema::dflt(65)?; // 64 members + a title
+        let kind = Some(CRYPTO_KIND_VLD0);
+
+        let dht_record = routing_context.create_dht_record(schema, kind).await?;
+        let owner_keypair = vld0_generate_keypair();
+        let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
+
+        let encryption_key = crypto_system.random_shared_secret();
+
+        let keypair = CommonKeypair {
+            id: dht_record.key().value.clone(),
+            public_key: dht_record.owner().clone(),
+            secret_key: dht_record.owner_secret().cloned(),
+            encryption_key: encryption_key,
+        };
+
+        Ok(RpcService {
+            backend,
+            keypair,
+            routing_context,
+            crypto_system,
+            dht_record,
+        })
     }
-    /// Start listening for AppCall events.
+
+    pub fn get_url(&self) -> String {
+        let mut url = Url::parse(format!("{0}:?", PROTOCOL_SCHEME).as_str()).unwrap();
+
+        url.query_pairs_mut()
+            .append_pair(URL_DHT_KEY, self.get_id().encode_hex::<String>().as_str())
+            .append_pair(
+                URL_ENCRYPTION_KEY,
+                self.get_encryption_key().encode_hex::<String>().as_str(),
+            )
+            .append_key_only("rpc");
+        url.to_string()
+    }
+
+    // Start listening for AppCall events.
     pub async fn start_update_listener(&self) -> Result<()> {
         // Subscribe to updates from the backend
         let mut update_rx = self
@@ -63,7 +110,7 @@ impl RpcService {
                         VeilidUpdate::AppCall(app_call) => {
                             // Attempt to parse the app_call message with Protocol Buffers
                             let parsed_call = AppCallRequest::decode(app_call.message());
-                            
+
                             match parsed_call {
                                 Ok(request) => {
                                     // Process the parsed AppCall
@@ -97,11 +144,10 @@ impl RpcService {
         Ok(())
     }
 
-
     async fn handle_app_call(&self, app_call: VeilidAppCall) -> Result<()> {
         let call_id = app_call.id();
         let message = app_call.message();
-    
+
         // Attempt to parse the message with Protocol Buffers
         let app_call_request = AppCallRequest::decode(message);
         let response = match app_call_request {
@@ -117,14 +163,14 @@ impl RpcService {
                 })
             }
         };
-    
+
         // Encode the AppCallResponse
         let mut buf = Vec::new();
         response?.encode(&mut buf).map_err(|e| {
             error!("Failed to encode AppCallResponse: {}", e);
             anyhow!("Failed to encode AppCallResponse: {}", e)
         })?;
-    
+
         // Send the response using VeilidAPI's app_call_reply
         self.backend
             .get_veilid_api()
@@ -136,13 +182,15 @@ impl RpcService {
                 error!("Failed to send AppCall reply: {}", e);
                 anyhow!("Failed to send AppCall reply: {}", e)
             })?;
-    
+
         Ok(())
     }
-    
 
     /// Process the AppCallRequest and generate a response
-    async fn process_app_call(&self, request: AppCallRequest) -> Result<AppCallResponse, anyhow::Error> {
+    async fn process_app_call(
+        &self,
+        request: AppCallRequest,
+    ) -> Result<AppCallResponse, anyhow::Error> {
         match request.command.as_str() {
             "ping" => Ok(AppCallResponse {
                 success: true,
@@ -160,7 +208,6 @@ impl RpcService {
     }
 }
 
-
 pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
     // Path to the keys file
     let base_dir = std::env::current_dir().expect("Failed to get current directory");
@@ -171,13 +218,24 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
         println!("Found existing group_keys.txt, loading group.");
 
         // Read keys from the file
-        let keys_file = File::open(&keys_path).await.expect("Failed to open group_keys.txt");
+        let keys_file = File::open(&keys_path)
+            .await
+            .expect("Failed to open group_keys.txt");
         let mut lines = BufReader::new(keys_file).lines();
 
         // Extract group_id, secret_key, and encryption_key
-        let group_id = lines.next_line().await?.ok_or_else(|| anyhow!("Missing group ID"))?;
-        let secret_key = lines.next_line().await?.ok_or_else(|| anyhow!("Missing secret key"))?;
-        let encryption_key = lines.next_line().await?.ok_or_else(|| anyhow!("Missing encryption key"))?;
+        let group_id = lines
+            .next_line()
+            .await?
+            .ok_or_else(|| anyhow!("Missing group ID"))?;
+        let secret_key = lines
+            .next_line()
+            .await?
+            .ok_or_else(|| anyhow!("Missing secret key"))?;
+        let encryption_key = lines
+            .next_line()
+            .await?
+            .ok_or_else(|| anyhow!("Missing encryption key"))?;
 
         // Transform Key string into CryptoKey
         let bytes = hex::decode(group_id)?;
@@ -185,7 +243,7 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
         key_vec.copy_from_slice(&bytes);
 
         // Convert the byte array to a CryptoKey
-        let record_key = CryptoKey::new(key_vec); 
+        let record_key = CryptoKey::new(key_vec);
 
         // Use the Backend's `load_group` method to initialize with these keys
         backend.get_group(&record_key).await?;
@@ -208,9 +266,9 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
 
     // Create the DHT Record for the RPC service
     let routing_context = backend
-    .get_routing_context()
-    .await
-    .ok_or_else(|| anyhow!("Failed to get routing context"))?;
+        .get_routing_context()
+        .await
+        .ok_or_else(|| anyhow!("Failed to get routing context"))?;
     let schema = DHTSchema::dflt(65)?; // 64 members + a title
     let kind = Some(CRYPTO_KIND_VLD0);
 
@@ -223,7 +281,7 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
         .ok_or_else(|| anyhow!("Failed to get veilid API"))?;
     // Get crypto_system
     let crypto_system = CryptoSystemVLD0::new(veilid_api.crypto().unwrap());
-    
+
     let encryption_key = crypto_system.random_shared_secret();
 
     // Initialize keypair
@@ -235,9 +293,9 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
     };
 
     keypair
-    .store_keypair(&protected_store)
-    .await
-    .map_err(|e| anyhow!(e))?;
+        .store_keypair(&protected_store)
+        .await
+        .map_err(|e| anyhow!(e))?;
 
     let rpc_service = RpcService {
         backend,
@@ -383,7 +441,6 @@ async fn replicate_repo(group: &Group, repo: &Repo) -> Result<(), anyhow::Error>
 
         // If the repo is not writable and the file hash is not found in the group, attempt to download it.
         if !repo.can_write() && !group.has_hash(&file_hash).await? {
-            
             download(group, &file_hash).await?;
         }
         // Attempt to retrieve the file using download_file_from
@@ -433,9 +490,6 @@ async fn download(group: &Group, hash: &Hash) -> Result<()> {
     Err(anyhow!("Unable to download from any peer"))
 }
 
-
-
-
 impl DHTEntity for RpcService {
     async fn set_name(&self, name: &str) -> Result<()> {
         let routing_context = self.get_routing_context();
@@ -462,7 +516,7 @@ impl DHTEntity for RpcService {
     fn get_dht_record(&self) -> DHTRecordDescriptor {
         self.dht_record.clone()
     }
-    
+
     fn get_routing_context(&self) -> RoutingContext {
         self.routing_context.clone()
     }

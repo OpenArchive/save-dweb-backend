@@ -3,6 +3,7 @@ pub mod common;
 pub mod constants;
 pub mod group;
 pub mod repo;
+pub mod rpc;
 
 use crate::constants::{
     FAILED_TO_DESERIALIZE_KEYPAIR, FAILED_TO_LOAD_KEYPAIR, GROUP_NOT_FOUND, KEYPAIR_NOT_FOUND,
@@ -29,6 +30,7 @@ mod tests {
     use anyhow::Result;
     use bytes::Bytes;
     use common::init_veilid;
+    use rpc::RpcService;
     use std::path::Path;
     use std::result;
     use tmpdir::TmpDir;
@@ -1326,6 +1328,26 @@ mod tests {
         );
 
         // Clean up
+        backend.stop().await.expect("Unable to stop backend");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_rpc_service_init() -> Result<()> {
+        // Setup temporary directory and initialize the backend
+        let path = TmpDir::new("test_backend_collection_hash_consistency")
+            .await
+            .unwrap();
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        let rpcInstance = RpcService::from_backend(&backend).await?;
+
         backend.stop().await.expect("Unable to stop backend");
         Ok(())
     }
