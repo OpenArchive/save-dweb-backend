@@ -1,4 +1,5 @@
 use crate::backend::Backend;
+use crate::rpc::RpcService;
 use crate::common::{CommonKeypair, DHTEntity};
 use crate::constants::{UNABLE_TO_GET_GROUP_NAME, UNABLE_TO_SET_GROUP_NAME};
 use crate::group::Group;
@@ -18,9 +19,6 @@ mod constants;
 mod group;
 mod repo;
 mod rpc;
-
-use rpc::rpc_server::RpcServer;
-use rpc::start_rpc_server;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -79,8 +77,11 @@ async fn main() -> anyhow::Result<()> {
         // Start the backend to initialize necessary components
         backend.start().await?;
 
-        // Start the RPC server with the backend
-        start_rpc_server(backend.clone(), rpc_addr).await?;
+        // Create RPC service
+        let rpc_service = RpcService::from_backend(&backend).await?;
+
+        // Start the update listener
+        rpc_service.start_update_listener().await?;
 
     } else {
         // Otherwise, start the normal backend and group operations
