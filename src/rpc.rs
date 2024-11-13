@@ -242,6 +242,18 @@ pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
 
     let rpc_service = RpcService::from_backend(&backend).await?;
 
+    // Print the DHT key and secret
+    let dht_record = rpc_service.descriptor.get_dht_record();
+    let dht_key = dht_record.key();
+    println!("DHT Key: {:?}", dht_key.value);
+    
+    if let Some(secret) = rpc_service.descriptor.get_secret_key() {
+        println!("Secret Key: {:?}", secret);
+    } else {
+        println!("Secret Key: None");
+    }
+
+
     // Start the update listener
     rpc_service.start_update_listener().await?;
 
