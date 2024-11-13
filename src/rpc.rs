@@ -59,7 +59,7 @@ pub struct RpcServiceDescriptor {
 }
 
 impl RpcServiceDescriptor {
-    pub async fn from_url(url: &String) -> Result<Self> {
+    pub async fn from_url(url: &str) -> Result<Self> {
         Err(anyhow!("Not implemented"))
     }
 
