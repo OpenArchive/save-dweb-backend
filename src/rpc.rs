@@ -100,7 +100,7 @@ impl RpcService {
             id: dht_record.key().value.clone(),
             public_key: dht_record.owner().clone(),
             secret_key: dht_record.owner_secret().cloned(),
-            encryption_key: encryption_key,
+            encryption_key,
         };
 
         let descriptor = RpcServiceDescriptor {
