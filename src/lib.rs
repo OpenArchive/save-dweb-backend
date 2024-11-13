@@ -1346,7 +1346,7 @@ mod tests {
         let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
-        let rpcInstance = RpcService::from_backend(&backend).await?;
+        let rpc_instance = RpcService::from_backend(&backend).await?;
 
         backend.stop().await.expect("Unable to stop backend");
         Ok(())
