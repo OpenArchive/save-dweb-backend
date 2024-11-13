@@ -178,7 +178,7 @@ impl RpcService {
 
         match message_type_byte {
             0 => {
-                let request: ReplicateGroupRequest = from_slice(payload)?;
+                let request: ReplicateGroupRequest = serde_cbor::from_slice(payload)?;
                 let response = self.replicate_group(request).await?;
                 self.send_response(call_id.into(), 0, &response).await?;
             }
@@ -187,7 +187,7 @@ impl RpcService {
                 self.send_response(call_id.into(), 1, &response).await?;
             }
             2 => {
-                let request: RemoveGroupRequest = from_slice(payload)?;
+                let request: RemoveGroupRequest = serde_cbor::from_slice(payload)?;
                 let response = self.remove_group(request).await?;
                 self.send_response(call_id.into(), 2, &response).await?;
             }
@@ -206,7 +206,7 @@ impl RpcService {
         response: &T,
     ) -> Result<()> {
         let mut response_buf = vec![message_type];
-        let payload = to_vec(response)?;
+        let payload = serde_cbor::to_vec(response)?;
         response_buf.extend_from_slice(&payload);
 
         self.backend
