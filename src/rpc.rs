@@ -238,33 +238,31 @@ impl RpcService {
         Ok(())
     }
 
-    async fn replicate_group(
+    async fn join_group(
         &self,
-        request: ReplicateGroupRequest,
-    ) -> Result<ReplicateGroupResponse> {
-        let group_id = request.group_id;
-        info!("Replicating group with ID: {}", group_id);
-
-        let group_bytes = URL_SAFE_NO_PAD.decode(&group_id)?;
-        let group_bytes: [u8; 32] = group_bytes
-            .try_into()
-            .map_err(|v: Vec<u8>| anyhow!("Expected 32 bytes, got {}", v.len()))?;
-        let group_key = CryptoKey::new(group_bytes);
-
+        request: JoinGroupRequest,
+    ) -> Result<JoinGroupResponse> {
+        let group_url = request.group_url;
+        info!("Joining group with URL: {}", group_url);
+    
+        // Use the backend to join the group from the provided URL
         let backend = self.backend.clone();
-        let group = backend.get_group(&group_key).await?;
-
+        let group = backend.join_from_url(&group_url).await?;
+    
+        // Fetch the list of repositories in the group
         let repo_keys: Vec<CryptoKey> = group.list_repos().await;
-
+    
         for repo_key in repo_keys {
             info!("Processing repository with crypto key: {:?}", repo_key);
-
+    
+            // Get the repository from the group
             let repo = group.get_repo(&repo_key).await?;
+            // Replicate the repository
             replicate_repo(&group, &repo).await?;
         }
-
-        Ok(ReplicateGroupResponse {
-            status_message: format!("Successfully replicated group: {}", group_id),
+    
+        Ok(JoinGroupResponse {
+            status_message: format!("Successfully joined and replicated group from URL: {}", group_url),
         })
     }
 
