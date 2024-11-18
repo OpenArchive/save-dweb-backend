@@ -38,27 +38,27 @@ enum MessageType {
 }
 
 #[derive(Serialize, Deserialize)]
-struct ReplicateGroupRequest {
+pub struct ReplicateGroupRequest {
     group_id: String,
 }
 
 #[derive(Serialize, Deserialize)]
-struct ReplicateGroupResponse {
+pub struct ReplicateGroupResponse {
     status_message: String,
 }
 
 #[derive(Serialize, Deserialize)]
-struct ListGroupsResponse {
-    group_ids: Vec<String>,
+pub struct ListGroupsResponse {
+    pub group_ids: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct RemoveGroupRequest {
-    group_id: String,
+pub struct RemoveGroupRequest {
+    pub group_id: String,
 }
 
 #[derive(Serialize, Deserialize)]
-struct RemoveGroupResponse {
+pub struct RemoveGroupResponse {
     status_message: String,
 }
 
@@ -269,7 +269,7 @@ impl RpcService {
     }
 
 
-    async fn list_groups(&self) -> Result<ListGroupsResponse> {
+    pub async fn list_groups(&self) -> Result<ListGroupsResponse> {
         let backend = self.backend.clone();
         let groups = backend.list_groups().await?;
 
@@ -278,7 +278,7 @@ impl RpcService {
         Ok(ListGroupsResponse { group_ids })
     }
 
-    async fn remove_group(&self, request: RemoveGroupRequest) -> Result<RemoveGroupResponse> {
+    pub async fn remove_group(&self, request: RemoveGroupRequest) -> Result<RemoveGroupResponse> {
         let group_id = request.group_id;
         info!("Removing group with ID: {}", group_id);
 
