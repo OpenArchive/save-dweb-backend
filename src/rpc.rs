@@ -30,9 +30,9 @@ const MESSAGE_TYPE_REMOVE_GROUP: u8 = 0x02;
 
 #[derive(Serialize, Deserialize)]
 enum MessageType {
-    ReplicateGroup = 0,
-    ListGroups = 1,
-    RemoveGroup = 2,
+    ReplicateGroup = MESSAGE_TYPE_REPLICATE_GROUP,
+    ListGroups = MESSAGE_TYPE_LIST_GROUPS,
+    RemoveGroup = MESSAGE_TYPE_REMOVE_GROUP,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -181,19 +181,19 @@ impl RpcService {
         let payload = &message[1..];
 
         match message_type_byte {
-            0 => {
+            MESSAGE_TYPE_REPLICATE_GROUP => {
                 let request: ReplicateGroupRequest = serde_cbor::from_slice(payload)?;
                 let response = self.replicate_group(request).await?;
-                self.send_response(call_id.into(), 0, &response).await?;
+                self.send_response(call_id.into(), MESSAGE_TYPE_REPLICATE_GROUP, &response).await?;
             }
-            1 => {
+            MESSAGE_TYPE_LIST_GROUPS => {
                 let response = self.list_groups().await?;
-                self.send_response(call_id.into(), 1, &response).await?;
+                self.send_response(call_id.into(), MESSAGE_TYPE_LIST_GROUPS, &response).await?;
             }
-            2 => {
+            MESSAGE_TYPE_REMOVE_GROUP => {
                 let request: RemoveGroupRequest = serde_cbor::from_slice(payload)?;
                 let response = self.remove_group(request).await?;
-                self.send_response(call_id.into(), 2, &response).await?;
+                self.send_response(call_id.into(), MESSAGE_TYPE_REMOVE_GROUP, &response).await?;
             }
             _ => {
                 error!("Unknown message type: {}", message_type_byte);
