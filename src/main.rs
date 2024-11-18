@@ -1,11 +1,12 @@
 use crate::backend::Backend;
 use crate::rpc::RpcService;
+use crate::rpc::{JoinGroupRequest, RemoveGroupRequest};
 use crate::common::{CommonKeypair, DHTEntity};
 use crate::constants::{UNABLE_TO_GET_GROUP_NAME, UNABLE_TO_SET_GROUP_NAME};
 use crate::group::Group;
 use crate::repo::Repo;
 use anyhow::{anyhow, Result};
-use clap::{Arg, Command, ArgAction};
+use clap::{Arg, Command, ArgAction, Subcommand};
 use tokio::fs;
 use tokio::task;
 use tokio::sync::Mutex;
@@ -19,6 +20,19 @@ mod constants;
 mod group;
 mod repo;
 mod rpc;
+
+#[derive(Subcommand)]
+enum Commands {
+    Join {
+        #[arg(long)]
+        group_url: String,
+    },
+    Remove {
+        #[arg(long)]
+        group_id: String,
+    },
+    List,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -58,6 +72,27 @@ async fn main() -> anyhow::Result<()> {
                 .help("Sets the encryption key for the group")
                 .value_parser(clap::value_parser!(String)),
         )
+        .subcommand(
+            Command::new("join")
+                .about("Join a group")
+                .arg(
+                    Arg::new("group_url")
+                        .long("group-url")
+                        .help("URL of the group to join")
+                        .required(true),
+                ),
+        )
+        .subcommand(
+            Command::new("remove")
+                .about("Remove a group")
+                .arg(
+                    Arg::new("group_id")
+                        .long("group-id")
+                        .help("ID of the group to remove")
+                        .required(true),
+                ),
+        )
+        .subcommand(Command::new("list").about("List known groups"))
         .get_matches();
 
     let xdg_dirs = BaseDirectories::with_prefix("save-dweb-backend")?;
@@ -85,38 +120,63 @@ async fn main() -> anyhow::Result<()> {
 
         // Start the update listener
         rpc_service.start_update_listener().await?;
+    }
 
-    } else {
-        // Otherwise, start the normal backend and group operations
-        backend.start().await?;
-
-        // Check if keys were provided, otherwise create a new group
-        if matches.contains_id("pubkey")
-            && matches.contains_id("seckey")
-            && matches.contains_id("enckey")
-        {
-            let pubkey = matches.get_one::<String>("pubkey").unwrap();
-            let seckey = matches.get_one::<String>("seckey").unwrap();
-            let enckey = matches.get_one::<String>("enckey").unwrap();
-            println!("Provided Public Key: {:?}", pubkey);
-            println!("Provided Secret Key: {:?}", seckey);
-            println!("Provided Encryption Key: {:?}", enckey);
-        } else {
-            let group = backend.create_group().await?;
-            println!("Group created with Record Key: {:?}", group.id());
-            println!(
-                "Group created with Secret Key: {:?}",
-                group.get_secret_key().unwrap()
-            );
-            println!(
-                "Group created with Encryption Key: {:?}",
-                group.get_encryption_key()
-            );
+    match matches.subcommand() {
+        Some(("join", sub_matches)) => {
+            let group_url = sub_matches.get_one::<String>("group_url").unwrap();
+            backend.start().await?;
+            let rpc_service = RpcService::from_backend(&backend).await?;
+            rpc_service.join_group(JoinGroupRequest { group_url: group_url.clone() }).await?;
+            println!("Joined group with URL: {}", group_url);
         }
+        Some(("remove", sub_matches)) => {
+            let group_id = sub_matches.get_one::<String>("group_id").unwrap();
+            backend.start().await?;
+            let rpc_service = RpcService::from_backend(&backend).await?;
+            rpc_service.remove_group(RemoveGroupRequest { group_id: group_id.clone() }).await?;
+            println!("Removed group with ID: {}", group_id);
+        }
+        Some(("list", _)) => {
+            backend.start().await?;
+            let rpc_service = RpcService::from_backend(&backend).await?;
+            let response = rpc_service.list_groups().await?;
+            for group_id in response.group_ids {
+                println!("Group ID: {}", group_id);
+            }
+        }
+        _ => {
+            // Otherwise, start the normal backend and group operations
+            backend.start().await?;
 
-        // Await for ctrl-c and then stop the backend
-        tokio::signal::ctrl_c().await?;
-        backend.stop().await?;
+            // Check if keys were provided, otherwise create a new group
+            if matches.contains_id("pubkey")
+                && matches.contains_id("seckey")
+                && matches.contains_id("enckey")
+            {
+                let pubkey = matches.get_one::<String>("pubkey").unwrap();
+                let seckey = matches.get_one::<String>("seckey").unwrap();
+                let enckey = matches.get_one::<String>("enckey").unwrap();
+                println!("Provided Public Key: {:?}", pubkey);
+                println!("Provided Secret Key: {:?}", seckey);
+                println!("Provided Encryption Key: {:?}", enckey);
+            } else {
+                let group = backend.create_group().await?;
+                println!("Group created with Record Key: {:?}", group.id());
+                println!(
+                    "Group created with Secret Key: {:?}",
+                    group.get_secret_key().unwrap()
+                );
+                println!(
+                    "Group created with Encryption Key: {:?}",
+                    group.get_encryption_key()
+                );
+            }
+
+            // Await for ctrl-c and then stop the backend
+            tokio::signal::ctrl_c().await?;
+            backend.stop().await?;
+        }
     }
 
     Ok(())
