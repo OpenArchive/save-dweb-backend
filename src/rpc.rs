@@ -24,7 +24,7 @@ use veilid_core::{
     RoutingContext, SharedSecret, VeilidAPI, VeilidAppCall, VeilidUpdate, CRYPTO_KIND_VLD0,
 };
 
-const MESSAGE_TYPE_REPLICATE_GROUP: u8 = 0x00;
+const MESSAGE_TYPE_JOIN_GROUP: u8 = 0x00;
 const MESSAGE_TYPE_LIST_GROUPS: u8 = 0x01;
 const MESSAGE_TYPE_REMOVE_GROUP: u8 = 0x02;
 const MESSAGE_TYPE_ERROR: u8 = 0xFF;
@@ -32,18 +32,18 @@ const MESSAGE_TYPE_ERROR: u8 = 0xFF;
 #[repr(u8)]
 #[derive(Serialize, Deserialize)]
 enum MessageType {
-    ReplicateGroup = MESSAGE_TYPE_REPLICATE_GROUP,
+    JoinGroup = MESSAGE_TYPE_JOIN_GROUP,
     ListGroups = MESSAGE_TYPE_LIST_GROUPS,
     RemoveGroup = MESSAGE_TYPE_REMOVE_GROUP,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct ReplicateGroupRequest {
-    group_id: String,
+pub struct JoinGroupRequest {
+    group_url: String,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct ReplicateGroupResponse {
+pub struct JoinGroupResponse {
     status_message: String,
 }
 
@@ -195,10 +195,10 @@ impl RpcService {
         let payload = &message[1..];
 
         match message_type_byte {
-            MESSAGE_TYPE_REPLICATE_GROUP => {
-                let request: ReplicateGroupRequest = serde_cbor::from_slice(payload)?;
-                let response = self.replicate_group(request).await?;
-                self.send_response(call_id.into(), MESSAGE_TYPE_REPLICATE_GROUP, &response).await?;
+            MESSAGE_TYPE_JOIN_GROUP => {
+                let request: JoinGroupRequest = serde_cbor::from_slice(payload)?;
+                let response = self.join_group(request).await?;
+                self.send_response(call_id.into(), MESSAGE_TYPE_JOIN_GROUP, &response).await?;
             }
             MESSAGE_TYPE_LIST_GROUPS => {
                 let response = self.list_groups().await?;
