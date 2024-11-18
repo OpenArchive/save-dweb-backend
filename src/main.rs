@@ -80,6 +80,9 @@ async fn main() -> anyhow::Result<()> {
         // Create RPC service
         let rpc_service = RpcService::from_backend(&backend).await?;
 
+        // Initialize and replicate all known groups
+        rpc_service.replicate_known_groups().await?;
+
         // Start the update listener
         rpc_service.start_update_listener().await?;
 
