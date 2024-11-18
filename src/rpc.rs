@@ -39,7 +39,7 @@ enum MessageType {
 
 #[derive(Serialize, Deserialize)]
 pub struct JoinGroupRequest {
-    group_url: String,
+    pub group_url: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -238,7 +238,7 @@ impl RpcService {
         Ok(())
     }
 
-    async fn join_group(
+    pub async fn join_group(
         &self,
         request: JoinGroupRequest,
     ) -> Result<JoinGroupResponse> {
