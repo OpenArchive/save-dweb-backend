@@ -153,11 +153,23 @@ impl RpcService {
         // Listen for incoming updates and handle AppCall
         loop {
             match update_rx.recv().await {
-                Ok(update) => if let VeilidUpdate::AppCall(app_call) = update {
-                    if let Err(e) = self.handle_app_call(*app_call).await {
-                        error!("Error processing AppCall: {}", e);
+                Ok(update) => {
+                    if let VeilidUpdate::AppCall(app_call) = update {
+                        let app_call_clone = app_call.clone();
+
+                        if let Err(e) = self.handle_app_call(*app_call).await {
+                            error!("Error processing AppCall: {}", e);
+            
+                            // Send an error response to the AppCall
+                            if let Err(err) = self
+                                .send_response(app_call_clone.id().into(), MESSAGE_TYPE_ERROR, &e.to_string())
+                                .await
+                            {
+                                error!("Failed to send error response: {}", err);
+                            }
+                        }
                     }
-                },
+                }
                 Err(RecvError::Lagged(count)) => {
                     error!("Missed {} updates", count);
                 }
