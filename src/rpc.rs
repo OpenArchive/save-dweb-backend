@@ -211,6 +211,7 @@ impl RpcService {
             }
             _ => {
                 error!("Unknown message type: {}", message_type_byte);
+                self.send_response(call_id.into(), MESSAGE_TYPE_ERROR, b"Unknown message type").await?;
             }
         }
 
