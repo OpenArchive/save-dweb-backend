@@ -293,6 +293,32 @@ impl RpcService {
             status_message: format!("Successfully removed group: {}", group_id),
         })
     }
+    
+    pub async fn replicate_known_groups(&self) -> Result<()> {
+        info!("Replicating all known groups...");
+
+        // Fetch all known group IDs from the backend
+        let group_ids = self.backend.list_known_group_ids().await?;
+
+        // Iterate over each group and replicate it
+        for group_id in group_ids {
+            info!("Replicating group with ID: {:?}", group_id);
+
+            // Retrieve the group object
+            let group = self.backend.get_group(&group_id).await?;
+
+            // Fetch and replicate all repositories within the group
+            for repo_key in group.list_repos().await {
+                info!("Processing repository with crypto key: {:?}", repo_key);
+
+                let repo = group.get_repo(&repo_key).await?;
+                replicate_repo(&group, &repo).await?;
+            }
+        }
+
+        info!("All known groups replicated successfully.");
+        Ok(())
+    }
 }
 
 async fn replicate_repo(group: &Group, repo: &Repo) -> Result<()> {
