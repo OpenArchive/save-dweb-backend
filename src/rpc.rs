@@ -27,6 +27,7 @@ use veilid_core::{
 const MESSAGE_TYPE_REPLICATE_GROUP: u8 = 0x00;
 const MESSAGE_TYPE_LIST_GROUPS: u8 = 0x01;
 const MESSAGE_TYPE_REMOVE_GROUP: u8 = 0x02;
+const MESSAGE_TYPE_ERROR: u8 = 0xFF;
 
 #[derive(Serialize, Deserialize)]
 enum MessageType {
