@@ -7,35 +7,60 @@ use crate::{
     group::{PROTOCOL_SCHEME, URL_DHT_KEY, URL_ENCRYPTION_KEY},
 };
 
-use anyhow::anyhow;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use futures::StreamExt;
 use hex::ToHex;
-use iroh::net::discovery::pkarr::dht;
 use iroh_blobs::Hash;
-use prost::Message;
+use serde::{Deserialize, Serialize};
+use serde_cbor::{from_slice, to_vec};
 use std::convert::TryInto;
-use std::fs;
-use tokio::fs::File;
-use tokio::io::{self, AsyncBufReadExt, BufReader};
 use tokio::sync::broadcast::error::RecvError;
-use tonic::async_trait;
-use tonic::transport::Server;
-use tonic::{Request, Response, Status};
 use tracing::{error, info};
 use url::Url;
 use veilid_core::{
-    vld0_generate_keypair, CryptoKey, CryptoSystem, CryptoSystemVLD0, DHTRecordDescriptor,
-    DHTSchema, RoutingContext, SharedSecret, VeilidAPI, VeilidAppCall, VeilidState, VeilidUpdate,
-    CRYPTO_KEY_LENGTH, CRYPTO_KIND_VLD0,
+    vld0_generate_keypair, CryptoKey, CryptoSystemVLD0, CryptoSystem, DHTRecordDescriptor, DHTSchema,
+    RoutingContext, SharedSecret, VeilidAPI, VeilidAppCall, VeilidUpdate, CRYPTO_KIND_VLD0,
 };
 
-use tonic_reflection::server::Builder;
+const MESSAGE_TYPE_JOIN_GROUP: u8 = 0x00;
+const MESSAGE_TYPE_LIST_GROUPS: u8 = 0x01;
+const MESSAGE_TYPE_REMOVE_GROUP: u8 = 0x02;
+const MESSAGE_TYPE_ERROR: u8 = 0xFF;
 
-tonic::include_proto!("rpc");
-pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("../descriptor.bin");
+#[repr(u8)]
+#[derive(Serialize, Deserialize)]
+enum MessageType {
+    JoinGroup = MESSAGE_TYPE_JOIN_GROUP,
+    ListGroups = MESSAGE_TYPE_LIST_GROUPS,
+    RemoveGroup = MESSAGE_TYPE_REMOVE_GROUP,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct JoinGroupRequest {
+    pub group_url: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct JoinGroupResponse {
+    status_message: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ListGroupsResponse {
+    pub group_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RemoveGroupRequest {
+    pub group_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RemoveGroupResponse {
+    status_message: String,
+}
 
 #[derive(Clone)]
 pub struct RpcService {
@@ -129,33 +154,24 @@ impl RpcService {
         loop {
             match update_rx.recv().await {
                 Ok(update) => {
-                    match update {
-                        VeilidUpdate::AppCall(app_call) => {
-                            // Attempt to parse the app_call message with Protocol Buffers
-                            let parsed_call = AppCallRequest::decode(app_call.message());
+                    if let VeilidUpdate::AppCall(app_call) = update {
+                        let app_call_clone = app_call.clone();
 
-                            match parsed_call {
-                                Ok(request) => {
-                                    // Process the parsed AppCall
-                                    if let Err(e) = self.process_app_call(request).await {
-                                        error!("Error processing AppCall: {}", e);
-                                    }
-                                }
-                                Err(parse_err) => {
-                                    // Log the parse error and skip handling this AppCall
-                                    error!("Failed to parse AppCall message: {}", parse_err);
-                                }
+                        if let Err(e) = self.handle_app_call(*app_call).await {
+                            error!("Error processing AppCall: {}", e);
+            
+                            // Send an error response to the AppCall
+                            if let Err(err) = self
+                                .send_response(app_call_clone.id().into(), MESSAGE_TYPE_ERROR, &e.to_string())
+                                .await
+                            {
+                                error!("Failed to send error response: {}", err);
                             }
-                        }
-                        _ => {
-                            // Handle other updates
-                            // TO DO: If the hash has changed, download the new file
                         }
                     }
                 }
                 Err(RecvError::Lagged(count)) => {
                     error!("Missed {} updates", count);
-                    // Decide how to handle missed updates
                 }
                 Err(RecvError::Closed) => {
                     error!("Update channel closed");
@@ -171,211 +187,144 @@ impl RpcService {
         let call_id = app_call.id();
         let message = app_call.message();
 
-        // Attempt to parse the message with Protocol Buffers
-        let app_call_request = AppCallRequest::decode(message);
-        let response = match app_call_request {
-            Ok(request) => {
-                info!("Received AppCall with command: {}", request.command);
-                self.process_app_call(request).await
-            }
-            Err(err) => {
-                error!("Failed to parse AppCall message: {}", err);
-                Ok(AppCallResponse {
-                    success: false,
-                    message: "Invalid AppCall message format".to_string(),
-                })
-            }
-        };
+        if message.is_empty() {
+            return Err(anyhow!("Empty message"));
+        }
 
-        // Encode the AppCallResponse
-        let mut buf = Vec::new();
-        response?.encode(&mut buf).map_err(|e| {
-            error!("Failed to encode AppCallResponse: {}", e);
-            anyhow!("Failed to encode AppCallResponse: {}", e)
-        })?;
+        let message_type_byte = message[0];
+        let payload = &message[1..];
 
-        // Send the response using VeilidAPI's app_call_reply
-        self.backend
-            .get_veilid_api()
-            .await
-            .ok_or_else(|| anyhow!("Veilid API not available"))?
-            .app_call_reply(call_id, buf)
-            .await
-            .map_err(|e| {
-                error!("Failed to send AppCall reply: {}", e);
-                anyhow!("Failed to send AppCall reply: {}", e)
-            })?;
+        match message_type_byte {
+            MESSAGE_TYPE_JOIN_GROUP => {
+                let request: JoinGroupRequest = serde_cbor::from_slice(payload)?;
+                let response = self.join_group(request).await?;
+                self.send_response(call_id.into(), MESSAGE_TYPE_JOIN_GROUP, &response).await?;
+            }
+            MESSAGE_TYPE_LIST_GROUPS => {
+                let response = self.list_groups().await?;
+                self.send_response(call_id.into(), MESSAGE_TYPE_LIST_GROUPS, &response).await?;
+            }
+            MESSAGE_TYPE_REMOVE_GROUP => {
+                let request: RemoveGroupRequest = serde_cbor::from_slice(payload)?;
+                let response = self.remove_group(request).await?;
+                self.send_response(call_id.into(), MESSAGE_TYPE_REMOVE_GROUP, &response).await?;
+            }
+            _ => {
+                error!("Unknown message type: {}", message_type_byte);
+                self.send_response(call_id.into(), MESSAGE_TYPE_ERROR, b"Unknown message type").await?;
+            }
+        }
 
         Ok(())
     }
 
-    /// Process the AppCallRequest and generate a response
-    async fn process_app_call(
+    async fn send_response<T: Serialize>(
         &self,
-        request: AppCallRequest,
-    ) -> Result<AppCallResponse, anyhow::Error> {
-        match request.command.as_str() {
-            "ping" => Ok(AppCallResponse {
-                success: true,
-                message: "pong".to_string(),
-            }),
-            "echo" => Ok(AppCallResponse {
-                success: true,
-                message: request.payload,
-            }),
-            _ => Ok(AppCallResponse {
-                success: false,
-                message: format!("Unknown command: {}", request.command),
-            }),
-        }
+        call_id: u64,
+        message_type: u8,
+        response: &T,
+    ) -> Result<()> {
+        let mut response_buf = vec![message_type];
+        let payload = serde_cbor::to_vec(response)?;
+        response_buf.extend_from_slice(&payload);
+
+        self.backend
+            .get_veilid_api()
+            .await
+            .ok_or_else(|| anyhow!("Veilid API not available"))?
+            .app_call_reply(call_id.into(), response_buf)
+            .await?;
+
+        Ok(())
     }
-}
 
-pub async fn start_rpc_server(backend: Backend, addr: &str) -> Result<()> {
-    // Load known groups from the backend
-    backend.load_known_groups().await?;
-    // Write keys to file
-    // Question: which keys should be loaded here?
-    //let base_dir = std::env::current_dir().expect("Failed to get current directory");
-    //let keys_path = base_dir.join("group_keys.txt");
-    //fs::write(&keys_path, keys).expect("Failed to write group keys to disk");
-
-    let rpc_service = RpcService::from_backend(&backend).await?;
-
-    // Print the DHT key and secret
-    let dht_record = rpc_service.descriptor.get_dht_record();
-    let dht_key = dht_record.key();
-    println!("DHT Key: {:?}", dht_key.value);
+    pub async fn join_group(
+        &self,
+        request: JoinGroupRequest,
+    ) -> Result<JoinGroupResponse> {
+        let group_url = request.group_url;
+        info!("Joining group with URL: {}", group_url);
     
-    if let Some(secret) = rpc_service.descriptor.get_secret_key() {
-        println!("Secret Key: {:?}", secret);
-    } else {
-        println!("Secret Key: None");
-    }
-
-
-    // Start the update listener
-    rpc_service.start_update_listener().await?;
-
-    // Build the reflection service
-    let reflection_service = Builder::configure()
-        .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
-        .build_v1()?;
-
-    Server::builder()
-        .add_service(rpc_server::RpcServer::new(rpc_service))
-        .add_service(reflection_service)
-        .serve(addr.parse()?)
-        .await?;
-    Ok(())
-}
-
-#[tonic::async_trait]
-impl rpc_server::Rpc for RpcService {
-    async fn replicate_group(
-        &self,
-        request: Request<ReplicateGroupRequest>,
-    ) -> Result<Response<ReplicateGroupResponse>, Status> {
-        let group_id = request.into_inner().group_id;
-        info!("Replicating group with ID: {}", group_id);
-
-        // Decode the Base64URL-encoded group ID into bytes
-        let group_bytes = URL_SAFE_NO_PAD.decode(&group_id).map_err(|_| {
-            error!("Invalid group ID encoding");
-            Status::invalid_argument("Invalid group ID encoding")
-        })?;
-
-        // Convert group_bytes to [u8; 32]
-        let group_bytes: [u8; 32] = group_bytes.try_into().map_err(|_| {
-            error!("Invalid group key length");
-            Status::invalid_argument("Invalid group key length")
-        })?;
-
-        let group_key = CryptoKey::new(group_bytes);
-
+        // Use the backend to join the group from the provided URL
         let backend = self.backend.clone();
-        let group = backend.get_group(&group_key).await.map_err(|e| {
-            error!("Failed to get group: {}", e);
-            Status::not_found(format!("Group not found: {}", e))
-        })?;
-
-        // Use list_repos() to list all repos in the group
+        let group = backend.join_from_url(&group_url).await?;
+    
+        // Fetch the list of repositories in the group
         let repo_keys: Vec<CryptoKey> = group.list_repos().await;
-
+    
         for repo_key in repo_keys {
             info!("Processing repository with crypto key: {:?}", repo_key);
-
-            let repo = group.get_repo(&repo_key).await.map_err(|e| {
-                error!("Failed to get repo: {}", e);
-                Status::internal(format!("Failed to get repo: {}", e))
-            })?;
-
-            // Call replicate_repo
-            replicate_repo(&group, &repo).await.map_err(|e| {
-                error!("Failed to replicate repository: {}", e);
-                Status::internal(format!("Failed to replicate repository: {}", e))
-            })?;
+    
+            // Get the repository from the group
+            let repo = group.get_repo(&repo_key).await?;
+            // Replicate the repository
+            replicate_repo(&group, &repo).await?;
         }
-
-        info!("Successfully replicated group: {}", group_id);
-        Ok(Response::new(ReplicateGroupResponse {
-            status_message: format!("Successfully replicated group: {}", group_id),
-        }))
+    
+        Ok(JoinGroupResponse {
+            status_message: format!("Successfully joined and replicated group from URL: {}", group_url),
+        })
     }
 
-    async fn list_groups(
-        &self,
-        _request: tonic::Request<ListGroupsRequest>,
-    ) -> Result<tonic::Response<ListGroupsResponse>, tonic::Status> {
+
+    pub async fn list_groups(&self) -> Result<ListGroupsResponse> {
         let backend = self.backend.clone();
-        let groups = backend.list_groups().await.map_err(|e| {
-            error!("Failed to list groups: {}", e);
-            Status::internal(format!("Failed to list groups: {}", e))
-        })?;
+        let groups = backend.list_groups().await?;
 
         let group_ids: Vec<String> = groups.iter().map(|g| g.id().to_string()).collect();
 
-        Ok(Response::new(ListGroupsResponse { group_ids }))
+        Ok(ListGroupsResponse { group_ids })
     }
 
-    async fn remove_group(
-        &self,
-        request: tonic::Request<RemoveGroupRequest>,
-    ) -> Result<tonic::Response<RemoveGroupResponse>, tonic::Status> {
-        let group_id = request.into_inner().group_id;
+    pub async fn remove_group(&self, request: RemoveGroupRequest) -> Result<RemoveGroupResponse> {
+        let group_id = request.group_id;
         info!("Removing group with ID: {}", group_id);
 
-        let group_bytes = URL_SAFE_NO_PAD.decode(&group_id).map_err(|_| {
-            error!("Invalid group ID encoding");
-            Status::invalid_argument("Invalid group ID encoding")
-        })?;
-
-        let group_bytes: [u8; 32] = group_bytes.try_into().map_err(|_| {
-            error!("Invalid group key length");
-            Status::invalid_argument("Invalid group key length")
-        })?;
-
+        let group_bytes = URL_SAFE_NO_PAD.decode(&group_id)?;
+        let group_bytes: [u8; 32] = group_bytes
+            .try_into()
+            .map_err(|v: Vec<u8>| anyhow!("Expected 32 bytes, got {}", v.len()))?;
         let group_key = CryptoKey::new(group_bytes);
 
         let backend = self.backend.clone();
-        backend.close_group(group_key).await.map_err(|e| {
-            error!("Failed to remove group: {}", e);
-            Status::internal(format!("Failed to remove group: {}", e))
-        })?;
+        backend.close_group(group_key).await?;
 
-        info!("Successfully removed group: {}", group_id);
-        Ok(Response::new(RemoveGroupResponse {
+        Ok(RemoveGroupResponse {
             status_message: format!("Successfully removed group: {}", group_id),
-        }))
+        })
+    }
+    
+    pub async fn replicate_known_groups(&self) -> Result<()> {
+        info!("Replicating all known groups...");
+
+        // Fetch all known group IDs from the backend
+        let group_ids = self.backend.list_known_group_ids().await?;
+
+        // Iterate over each group and replicate it
+        for group_id in group_ids {
+            info!("Replicating group with ID: {:?}", group_id);
+
+            // Retrieve the group object
+            let group = self.backend.get_group(&group_id).await?;
+
+            // Fetch and replicate all repositories within the group
+            for repo_key in group.list_repos().await {
+                info!("Processing repository with crypto key: {:?}", repo_key);
+
+                let repo = group.get_repo(&repo_key).await?;
+                replicate_repo(&group, &repo).await?;
+            }
+        }
+
+        info!("All known groups replicated successfully.");
+        Ok(())
     }
 }
 
-async fn replicate_repo(group: &Group, repo: &Repo) -> Result<(), anyhow::Error> {
-    // If the repo is not writable, attempt to download the entire collection.
+async fn replicate_repo(group: &Group, repo: &Repo) -> Result<()> {
     if !repo.can_write() {
         let collection_hash = repo.get_hash_from_dht().await?;
         if !group.has_hash(&collection_hash).await? {
-            // Use our custom function for downloading the collection from peers
             download(group, &collection_hash).await?;
         }
     }
