@@ -52,6 +52,12 @@ async fn main() -> anyhow::Result<()> {
                 .default_value("127.0.0.1:50051")
                 .value_parser(clap::value_parser!(String)),
         )
+        .arg(
+            Arg::new("backend_url")
+                .long("backend-url")
+                .help("URL of the backend")
+                .required(true),
+        )
         .subcommand(
             Command::new("join")
                 .about("Join a group")
@@ -75,6 +81,8 @@ async fn main() -> anyhow::Result<()> {
         .subcommand(Command::new("list").about("List known groups"))
         .subcommand(Command::new("start").about("Start the RPC service and log the URL"))
         .get_matches();
+
+    let backend_url = matches.get_one::<String>("backend_url").unwrap();
 
     let xdg_dirs = BaseDirectories::with_prefix("save-dweb-backend")?;
     let base_dir = xdg_dirs.get_data_home();
