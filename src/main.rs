@@ -38,20 +38,6 @@ enum Commands {
 async fn main() -> anyhow::Result<()> {
     let matches = Command::new("Save DWeb Backend")
         .arg(
-            Arg::new("pubkey")
-                .long("pubkey")
-                .value_name("PUBKEY")
-                .help("Sets the public key for the group")
-                .value_parser(clap::value_parser!(String)),
-        )
-        .arg(
-            Arg::new("secret")
-                .long("seckey")
-                .value_name("SECKEY")
-                .help("Sets the secret key for the group")
-                .value_parser(clap::value_parser!(String)),
-        )
-        .arg(
             Arg::new("rpc")
                 .long("rpc")
                 .help("Starts the RPC backup server")
@@ -63,13 +49,6 @@ async fn main() -> anyhow::Result<()> {
                 .value_name("RPC_ADDR")
                 .help("Sets the address for the RPC server")
                 .default_value("127.0.0.1:50051")
-                .value_parser(clap::value_parser!(String)),
-        )
-        .arg(
-            Arg::new("encryption_key")
-                .long("enckey")
-                .value_name("ENCKEY")
-                .help("Sets the encryption key for the group")
                 .value_parser(clap::value_parser!(String)),
         )
         .subcommand(
@@ -148,30 +127,6 @@ async fn main() -> anyhow::Result<()> {
         _ => {
             // Otherwise, start the normal backend and group operations
             backend.start().await?;
-
-            // Check if keys were provided, otherwise create a new group
-            if matches.contains_id("pubkey")
-                && matches.contains_id("seckey")
-                && matches.contains_id("enckey")
-            {
-                let pubkey = matches.get_one::<String>("pubkey").unwrap();
-                let seckey = matches.get_one::<String>("seckey").unwrap();
-                let enckey = matches.get_one::<String>("enckey").unwrap();
-                println!("Provided Public Key: {:?}", pubkey);
-                println!("Provided Secret Key: {:?}", seckey);
-                println!("Provided Encryption Key: {:?}", enckey);
-            } else {
-                let group = backend.create_group().await?;
-                println!("Group created with Record Key: {:?}", group.id());
-                println!(
-                    "Group created with Secret Key: {:?}",
-                    group.get_secret_key().unwrap()
-                );
-                println!(
-                    "Group created with Encryption Key: {:?}",
-                    group.get_encryption_key()
-                );
-            }
 
             // Await for ctrl-c and then stop the backend
             tokio::signal::ctrl_c().await?;
