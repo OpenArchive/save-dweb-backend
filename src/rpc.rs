@@ -98,7 +98,10 @@ impl RpcServiceDescriptor {
                 self.get_encryption_key().encode_hex::<String>().as_str(),
             )
             .append_key_only("rpc");
-        url.to_string()
+
+        let url_string = url.to_string();
+        info!("Descriptor URL: {}", url_string); 
+        url_string
     }
 }
 
@@ -134,6 +137,9 @@ impl RpcService {
             crypto_system,
             dht_record,
         };
+
+        // Log the descriptor URL
+        let descriptor_url = descriptor.get_url();
 
         Ok(RpcService {
             backend,
