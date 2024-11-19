@@ -32,6 +32,7 @@ enum Commands {
         group_id: String,
     },
     List,
+    Start,
 }
 
 #[tokio::main]
@@ -72,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
                 ),
         )
         .subcommand(Command::new("list").about("List known groups"))
+        .subcommand(Command::new("start").about("Start the RPC service and log the URL"))
         .get_matches();
 
     let xdg_dirs = BaseDirectories::with_prefix("save-dweb-backend")?;
@@ -123,6 +125,13 @@ async fn main() -> anyhow::Result<()> {
             for group_id in response.group_ids {
                 println!("Group ID: {}", group_id);
             }
+        }
+        Some(("start", _)) => {
+            backend.start().await?;
+            let rpc_service = RpcService::from_backend(&backend).await?;
+            let rpc_url = rpc_service.get_descriptor_url();
+            println!("RPC service started at URL: {}", rpc_url);
+            rpc_service.start_update_listener().await?;
         }
         _ => {
             // Otherwise, start the normal backend and group operations
