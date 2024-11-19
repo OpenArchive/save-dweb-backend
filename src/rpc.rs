@@ -147,6 +147,10 @@ impl RpcService {
         })
     }
 
+    pub fn get_descriptor_url(&self) -> String {
+        self.descriptor.get_url()
+    }
+
     // Start listening for AppCall events.
     pub async fn start_update_listener(&self) -> Result<()> {
         // Subscribe to updates from the backend
