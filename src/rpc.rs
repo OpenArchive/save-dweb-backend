@@ -104,71 +104,58 @@ impl RpcClient {
         })
     }
 
-    pub async fn join_group(&self, group_url: String) -> Result<JoinGroupResponse> {
-        let request = JoinGroupRequest { group_url };
-        let message = serde_cbor::to_vec(&request)?;
+    async fn send_rpc_request<T: Serialize, R: for<'de> Deserialize<'de>>(
+        &self,
+        request: &T,
+        message_type: u8,
+    ) -> Result<R> {
+        // Serialize the request
+        let message = serde_cbor::to_vec(request)?;
 
+        // Get the route ID blob and target
         let blob = self.descriptor.get_route_id_blob().await?;
         let route_id = self.veilid.import_remote_private_route(blob)?;
         let target = Target::PrivateRoute(route_id);
 
+        // Prefix the message type byte
+        let mut payload = vec![message_type];
+        payload.extend_from_slice(&message);
+
         // Send the app call and wait for the response
-        let response = self.routing_context.app_call(target, message).await?;
+        let response = self.routing_context.app_call(target, payload).await?;
 
         // Parse the response
-        let response: RpcResponse<JoinGroupResponse> = serde_cbor::from_slice(&response)?;
+        let response: RpcResponse<R> = serde_cbor::from_slice(&response)?;
 
+        // Handle success or error
         match response {
-            RpcResponse { success: Some(data), error: None } => Ok(data),
-            RpcResponse { success: None, error: Some(err) } => Err(anyhow!("RPC Error: {}", err)),
+            RpcResponse {
+                success: Some(data),
+                error: None,
+            } => Ok(data),
+            RpcResponse {
+                success: None,
+                error: Some(err),
+            } => Err(anyhow!("RPC Error: {}", err)),
             _ => Err(anyhow!("Unexpected response format")),
         }
     }
 
+    pub async fn join_group(&self, group_url: String) -> Result<JoinGroupResponse> {
+        let request = JoinGroupRequest { group_url };
+        self.send_rpc_request(&request, MESSAGE_TYPE_JOIN_GROUP).await
+    }
+    
     pub async fn list_groups(&self) -> Result<ListGroupsResponse> {
         let request = ListGroupsRequest;
-        let message = serde_cbor::to_vec(&request)?;
-
-        let blob = self.descriptor.get_route_id_blob().await?;
-        let route_id = self.veilid.import_remote_private_route(blob)?;
-        let target = Target::PrivateRoute(route_id);
-
-        // Send the app call and wait for the response
-        let response = self.routing_context.app_call(target, message).await?;
-
-        // Parse the response
-        let response: RpcResponse<ListGroupsResponse> = serde_cbor::from_slice(&response)?;
-
-        // Handle RpcResponse
-        match response {
-            RpcResponse { success: Some(data), error: None } => Ok(data),
-            RpcResponse { success: None, error: Some(err) } => Err(anyhow!("RPC Error: {}", err)),
-            _ => Err(anyhow!("Unexpected response format")),
-        }
+        self.send_rpc_request(&request, MESSAGE_TYPE_LIST_GROUPS).await
     }
 
     pub async fn remove_group(&self, group_id: String) -> Result<RemoveGroupResponse> {
         let request = RemoveGroupRequest { group_id };
-        let message = serde_cbor::to_vec(&request)?;
-
-        let blob = self.descriptor.get_route_id_blob().await?;
-        let route_id = self.veilid.import_remote_private_route(blob)?;
-        let target = Target::PrivateRoute(route_id);
-
-        // Send the app call and wait for the response
-        let response = self.routing_context.app_call(target, message).await?;
-
-        // Parse the response
-        // Parse the response
-        let response: RpcResponse<RemoveGroupResponse> = serde_cbor::from_slice(&response)?;
-
-        // Handle success or error
-        match response {
-            RpcResponse { success: Some(data), error: None } => Ok(data),
-            RpcResponse { success: None, error: Some(err) } => Err(anyhow!("RPC Error: {}", err)),
-            _ => Err(anyhow!("Unexpected response format")),
-        }
+        self.send_rpc_request(&request, MESSAGE_TYPE_REMOVE_GROUP).await
     }
+    
 }
 
 #[derive(Clone)]
