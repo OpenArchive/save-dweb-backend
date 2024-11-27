@@ -76,6 +76,12 @@ pub struct RpcService {
     descriptor: RpcServiceDescriptor,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct RpcResponse<T> {
+    pub success: Option<T>,
+    pub error: Option<String>,
+}
+
 // Just used for app calls
 pub struct RpcClient {
     veilid: VeilidAPI,
