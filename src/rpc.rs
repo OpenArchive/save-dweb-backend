@@ -52,6 +52,9 @@ pub struct JoinGroupResponse {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct ListGroupsRequest;
+
+#[derive(Serialize, Deserialize)]
 pub struct ListGroupsResponse {
     pub group_ids: Vec<String>,
 }
