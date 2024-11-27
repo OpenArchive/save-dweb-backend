@@ -116,9 +116,13 @@ impl RpcClient {
         let response = self.routing_context.app_call(target, message).await?;
 
         // Parse the response
-        let response: JoinGroupResponse = serde_cbor::from_slice(&response)?;
+        let response: RpcResponse<JoinGroupResponse> = serde_cbor::from_slice(&response)?;
 
-        Ok(response)
+        match response {
+            RpcResponse { success: Some(data), error: None } => Ok(data),
+            RpcResponse { success: None, error: Some(err) } => Err(anyhow!("RPC Error: {}", err)),
+            _ => Err(anyhow!("Unexpected response format")),
+        }
     }
 
     pub async fn list_groups(&self) -> Result<ListGroupsResponse> {
@@ -133,9 +137,14 @@ impl RpcClient {
         let response = self.routing_context.app_call(target, message).await?;
 
         // Parse the response
-        let response: ListGroupsResponse = serde_cbor::from_slice(&response)?;
+        let response: RpcResponse<ListGroupsResponse> = serde_cbor::from_slice(&response)?;
 
-        Ok(response)
+        // Handle RpcResponse
+        match response {
+            RpcResponse { success: Some(data), error: None } => Ok(data),
+            RpcResponse { success: None, error: Some(err) } => Err(anyhow!("RPC Error: {}", err)),
+            _ => Err(anyhow!("Unexpected response format")),
+        }
     }
 
     pub async fn remove_group(&self, group_id: String) -> Result<RemoveGroupResponse> {
@@ -150,9 +159,15 @@ impl RpcClient {
         let response = self.routing_context.app_call(target, message).await?;
 
         // Parse the response
-        let response: RemoveGroupResponse = serde_cbor::from_slice(&response)?;
+        // Parse the response
+        let response: RpcResponse<RemoveGroupResponse> = serde_cbor::from_slice(&response)?;
 
-        Ok(response)
+        // Handle success or error
+        match response {
+            RpcResponse { success: Some(data), error: None } => Ok(data),
+            RpcResponse { success: None, error: Some(err) } => Err(anyhow!("RPC Error: {}", err)),
+            _ => Err(anyhow!("Unexpected response format")),
+        }
     }
 }
 
