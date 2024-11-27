@@ -44,6 +44,7 @@ pub struct BackendInner {
     update_rx: Option<broadcast::Receiver<VeilidUpdate>>,
     groups: HashMap<CryptoKey, Box<Group>>,
     pub iroh_blobs: Option<VeilidIrohBlobs>,
+    on_new_route_callback: Option<OnNewRouteCallback>,
 }
 
 impl BackendInner {
@@ -98,6 +99,7 @@ impl Backend {
             update_rx: None,
             groups: HashMap::new(),
             iroh_blobs: None,
+            on_new_route_callback: None,
         };
 
         let backend = Backend {
@@ -119,6 +121,7 @@ impl Backend {
             update_rx: Some(update_rx),
             groups: HashMap::new(),
             iroh_blobs: None,
+            on_new_route_callback: None,
         };
 
         let backend = Backend {
@@ -127,10 +130,14 @@ impl Backend {
 
         let inner_clone = backend.inner.clone();
 
-        let on_new_route_callback: OnNewRouteCallback = Arc::new(move |_, _| {
+        let on_new_route_callback: OnNewRouteCallback = Arc::new(move |route_id, route_id_blob| {
             let inner = inner_clone.clone();
             tokio::spawn(async move {
                 let inner = inner.lock().await;
+
+                if let Some(on_new_route) = &inner.on_new_route_callback {
+                    on_new_route(route_id, route_id_blob)
+                }
 
                 for group in inner.groups.clone().into_values() {
                     if let Some(repo) = group.get_own_repo().await {
@@ -200,10 +207,14 @@ impl Backend {
 
         let inner_clone = self.inner.clone();
 
-        let on_new_route_callback: OnNewRouteCallback = Arc::new(move |_, _| {
+        let on_new_route_callback: OnNewRouteCallback = Arc::new(move |route_id, route_id_blob| {
             let inner = inner_clone.clone();
             tokio::spawn(async move {
                 let inner = inner.lock().await;
+
+                if let Some(on_new_route) = &inner.on_new_route_callback {
+                    on_new_route(route_id, route_id_blob)
+                }
 
                 for group in inner.groups.clone().into_values() {
                     if let Some(repo) = group.get_own_repo().await {
@@ -257,6 +268,14 @@ impl Backend {
             inner.groups = HashMap::new();
         }
         Ok(())
+    }
+
+    pub async fn set_on_new_route_callback(
+        &self,
+        on_new_route_connected_callback: OnNewRouteCallback,
+    ) {
+        let mut inner = self.inner.lock().await;
+        inner.on_new_route_callback = Some(on_new_route_connected_callback);
     }
 
     pub async fn join_from_url(&self, url_string: &str) -> Result<Box<Group>> {

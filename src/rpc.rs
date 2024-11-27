@@ -16,6 +16,7 @@ use iroh_blobs::Hash;
 use serde::{Deserialize, Serialize};
 use serde_cbor::{from_slice, to_vec};
 use std::convert::TryInto;
+use std::sync::Arc;
 use std::vec;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{error, info};
@@ -25,6 +26,7 @@ use veilid_core::{
     DHTSchema, RoutingContext, SharedSecret, Target, VeilidAPI, VeilidAppCall, VeilidUpdate,
     CRYPTO_KIND_VLD0,
 };
+use veilid_iroh_blobs::tunnels::OnNewRouteCallback;
 
 const MESSAGE_TYPE_JOIN_GROUP: u8 = 0x00;
 const MESSAGE_TYPE_LIST_GROUPS: u8 = 0x01;
@@ -205,6 +207,24 @@ impl RpcService {
             crypto_system,
             dht_record,
         };
+
+        let updatable_descriptor = descriptor.clone();
+
+        let on_new_route_callback: OnNewRouteCallback = Arc::new(move |route_id, route_id_blob| {
+            let updatable_descriptor = updatable_descriptor.clone();
+
+            tokio::spawn(async move {
+                if let Err(err) = updatable_descriptor
+                    .update_route_on_dht(route_id_blob)
+                    .await
+                {
+                    eprintln!(
+                        "Unable to update route after rebuild for RPC service: {}",
+                        err
+                    );
+                }
+            });
+        });
 
         // Log the descriptor URL
         let descriptor_url = descriptor.get_url();
