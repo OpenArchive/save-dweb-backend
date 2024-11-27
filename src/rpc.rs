@@ -1,7 +1,7 @@
 use crate::backend::Backend;
 use crate::common::{CommonKeypair, DHTEntity};
 use crate::group::Group;
-use crate::repo::Repo;
+use crate::repo::{Repo, ROUTE_SUBKEY};
 use crate::{
     constants::ROUTE_ID_DHT_KEY,
     group::{PROTOCOL_SCHEME, URL_DHT_KEY, URL_ENCRYPTION_KEY},
@@ -16,12 +16,14 @@ use iroh_blobs::Hash;
 use serde::{Deserialize, Serialize};
 use serde_cbor::{from_slice, to_vec};
 use std::convert::TryInto;
+use std::vec;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{error, info};
 use url::Url;
 use veilid_core::{
-    vld0_generate_keypair, CryptoKey, CryptoSystemVLD0, CryptoSystem, DHTRecordDescriptor, DHTSchema,
-    RoutingContext, SharedSecret, VeilidAPI, VeilidAppCall, VeilidUpdate, CRYPTO_KIND_VLD0,
+    vld0_generate_keypair, CryptoKey, CryptoSystem, CryptoSystemVLD0, DHTRecordDescriptor,
+    DHTSchema, RoutingContext, SharedSecret, Target, VeilidAPI, VeilidAppCall, VeilidUpdate,
+    CRYPTO_KIND_VLD0,
 };
 
 const MESSAGE_TYPE_JOIN_GROUP: u8 = 0x00;
@@ -75,6 +77,43 @@ pub struct RpcClient {
     descriptor: RpcServiceDescriptor,
 }
 
+impl RpcClient {
+    pub async fn from_veilid(veilid: VeilidAPI, url: &str) -> Result<Self> {
+        let routing_context = veilid.routing_context()?;
+        let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
+
+        let descriptor =
+            RpcServiceDescriptor::from_url(routing_context.clone(), crypto_system, url).await?;
+
+        Ok(RpcClient {
+            veilid,
+            routing_context,
+            descriptor,
+        })
+    }
+
+    pub async fn join_group(&self, group_url: String) -> Result<()> {
+        let request = JoinGroupRequest { group_url };
+        let message = serde_cbor::to_vec(&request)?;
+
+        let blob = self.descriptor.get_route_id_blob().await?;
+        let route_id = self.veilid.import_remote_private_route(blob)?;
+        let target = Target::PrivateRoute(route_id);
+
+        // TODO: Parse response
+        self.routing_context.app_call(target, message).await?;
+        Err(anyhow!("Not implemented"))
+    }
+
+    pub async fn list_groups(&self) -> Result<Vec<String>> {
+        Err(anyhow!("Not implemented"))
+    }
+
+    pub async fn remove_group(&self, group_id: String) -> Result<()> {
+        Err(anyhow!("Not implemented"))
+    }
+}
+
 #[derive(Clone)]
 pub struct RpcServiceDescriptor {
     keypair: CommonKeypair,
@@ -84,7 +123,11 @@ pub struct RpcServiceDescriptor {
 }
 
 impl RpcServiceDescriptor {
-    pub async fn from_url(url: &str) -> Result<Self> {
+    pub async fn from_url(
+        routing_context: RoutingContext,
+        crypto_system: CryptoSystemVLD0,
+        url: &str,
+    ) -> Result<Self> {
         Err(anyhow!("Not implemented"))
     }
 
@@ -100,8 +143,33 @@ impl RpcServiceDescriptor {
             .append_key_only("rpc");
 
         let url_string = url.to_string();
-        info!("Descriptor URL: {}", url_string); 
+        info!("Descriptor URL: {}", url_string);
         url_string
+    }
+    pub async fn get_route_id_blob(&self) -> Result<Vec<u8>> {
+        let value = self
+            .routing_context
+            .get_dht_value(self.dht_record.key().clone(), ROUTE_SUBKEY, true)
+            .await?
+            .ok_or_else(|| anyhow!("Unable to get DHT value for route id blob"))?
+            .data()
+            .to_vec();
+        Ok(value)
+    }
+
+    pub async fn update_route_on_dht(&self, route_id_blob: Vec<u8>) -> Result<()> {
+        // Set the root hash in the DHT record
+        self.routing_context
+            .set_dht_value(
+                self.dht_record.key().clone(),
+                ROUTE_SUBKEY,
+                route_id_blob,
+                None,
+            )
+            .await
+            .map_err(|e| anyhow!("Failed to store route ID blob in DHT: {}", e))?;
+
+        Ok(())
     }
 }
 
@@ -114,7 +182,7 @@ impl RpcService {
             .ok_or_else(|| anyhow!("Backend not started"))?;
 
         let routing_context = veilid.routing_context()?;
-        let schema = DHTSchema::dflt(65)?; // 64 members + a title
+        let schema = DHTSchema::dflt(2)?; // Title + Route Id
         let kind = Some(CRYPTO_KIND_VLD0);
 
         // TODO: try loading from protected store before creating
@@ -169,10 +237,14 @@ impl RpcService {
 
                         if let Err(e) = self.handle_app_call(*app_call).await {
                             error!("Error processing AppCall: {}", e);
-            
+
                             // Send an error response to the AppCall
                             if let Err(err) = self
-                                .send_response(app_call_clone.id().into(), MESSAGE_TYPE_ERROR, &e.to_string())
+                                .send_response(
+                                    app_call_clone.id().into(),
+                                    MESSAGE_TYPE_ERROR,
+                                    &e.to_string(),
+                                )
                                 .await
                             {
                                 error!("Failed to send error response: {}", err);
@@ -208,20 +280,24 @@ impl RpcService {
             MESSAGE_TYPE_JOIN_GROUP => {
                 let request: JoinGroupRequest = serde_cbor::from_slice(payload)?;
                 let response = self.join_group(request).await?;
-                self.send_response(call_id.into(), MESSAGE_TYPE_JOIN_GROUP, &response).await?;
+                self.send_response(call_id.into(), MESSAGE_TYPE_JOIN_GROUP, &response)
+                    .await?;
             }
             MESSAGE_TYPE_LIST_GROUPS => {
                 let response = self.list_groups().await?;
-                self.send_response(call_id.into(), MESSAGE_TYPE_LIST_GROUPS, &response).await?;
+                self.send_response(call_id.into(), MESSAGE_TYPE_LIST_GROUPS, &response)
+                    .await?;
             }
             MESSAGE_TYPE_REMOVE_GROUP => {
                 let request: RemoveGroupRequest = serde_cbor::from_slice(payload)?;
                 let response = self.remove_group(request).await?;
-                self.send_response(call_id.into(), MESSAGE_TYPE_REMOVE_GROUP, &response).await?;
+                self.send_response(call_id.into(), MESSAGE_TYPE_REMOVE_GROUP, &response)
+                    .await?;
             }
             _ => {
                 error!("Unknown message type: {}", message_type_byte);
-                self.send_response(call_id.into(), MESSAGE_TYPE_ERROR, b"Unknown message type").await?;
+                self.send_response(call_id.into(), MESSAGE_TYPE_ERROR, b"Unknown message type")
+                    .await?;
             }
         }
 
@@ -248,34 +324,33 @@ impl RpcService {
         Ok(())
     }
 
-    pub async fn join_group(
-        &self,
-        request: JoinGroupRequest,
-    ) -> Result<JoinGroupResponse> {
+    pub async fn join_group(&self, request: JoinGroupRequest) -> Result<JoinGroupResponse> {
         let group_url = request.group_url;
         info!("Joining group with URL: {}", group_url);
-    
+
         // Use the backend to join the group from the provided URL
         let backend = self.backend.clone();
         let group = backend.join_from_url(&group_url).await?;
-    
+
         // Fetch the list of repositories in the group
         let repo_keys: Vec<CryptoKey> = group.list_repos().await;
-    
+
         for repo_key in repo_keys {
             info!("Processing repository with crypto key: {:?}", repo_key);
-    
+
             // Get the repository from the group
             let repo = group.get_repo(&repo_key).await?;
             // Replicate the repository
             replicate_repo(&group, &repo).await?;
         }
-    
+
         Ok(JoinGroupResponse {
-            status_message: format!("Successfully joined and replicated group from URL: {}", group_url),
+            status_message: format!(
+                "Successfully joined and replicated group from URL: {}",
+                group_url
+            ),
         })
     }
-
 
     pub async fn list_groups(&self) -> Result<ListGroupsResponse> {
         let backend = self.backend.clone();
@@ -303,7 +378,7 @@ impl RpcService {
             status_message: format!("Successfully removed group: {}", group_id),
         })
     }
-    
+
     pub async fn replicate_known_groups(&self) -> Result<()> {
         info!("Replicating all known groups...");
 
