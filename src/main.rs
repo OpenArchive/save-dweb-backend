@@ -55,7 +55,8 @@ async fn main() -> anyhow::Result<()> {
             Arg::new("backend_url")
                 .long("backend-url")
                 .help("URL of the backend")
-                .required(false),
+                .required(false)
+                .global(true),
         )
         .subcommand(
             Command::new("join")
