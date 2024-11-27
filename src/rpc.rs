@@ -111,8 +111,21 @@ impl RpcClient {
         Ok(response)
     }
 
-    pub async fn list_groups(&self) -> Result<Vec<String>> {
-        Err(anyhow!("Not implemented"))
+    pub async fn list_groups(&self) -> Result<ListGroupsResponse> {
+        let request = ListGroupsRequest;
+        let message = serde_cbor::to_vec(&request)?;
+
+        let blob = self.descriptor.get_route_id_blob().await?;
+        let route_id = self.veilid.import_remote_private_route(blob)?;
+        let target = Target::PrivateRoute(route_id);
+
+        // Send the app call and wait for the response
+        let response = self.routing_context.app_call(target, message).await?;
+
+        // Parse the response
+        let response: ListGroupsResponse = serde_cbor::from_slice(&response)?;
+
+        Ok(response)
     }
 
     pub async fn remove_group(&self, group_id: String) -> Result<()> {
