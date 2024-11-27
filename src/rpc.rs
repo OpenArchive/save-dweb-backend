@@ -329,19 +329,19 @@ impl RpcService {
 
                         if let Err(e) = self.handle_app_call(*app_call).await {
                             error!("Error processing AppCall: {}", e);
-
-                            // Send an error response to the AppCall
+                        
+                            // Wrap the error in RpcResponse and send it
+                            let error_response: RpcResponse<()> = RpcResponse {
+                                success: None,
+                                error: Some(e.to_string()),
+                            };
                             if let Err(err) = self
-                                .send_response(
-                                    app_call_clone.id().into(),
-                                    MESSAGE_TYPE_ERROR,
-                                    &e.to_string(),
-                                )
+                                .send_response(app_call_clone.id().into(), MESSAGE_TYPE_ERROR, &error_response)
                                 .await
                             {
                                 error!("Failed to send error response: {}", err);
                             }
-                        }
+                        }                        
                     }
                 }
                 Err(RecvError::Lagged(count)) => {
@@ -356,51 +356,61 @@ impl RpcService {
 
         Ok(())
     }
-
+    
     async fn handle_app_call(&self, app_call: VeilidAppCall) -> Result<()> {
         let call_id = app_call.id();
         let message = app_call.message();
-
+    
         if message.is_empty() {
+            let error_response: RpcResponse<()> = RpcResponse {
+                success: None,
+                error: Some("Empty message".to_string()),
+            };
+            self.send_response(call_id.into(), MESSAGE_TYPE_ERROR, &error_response)
+                .await?;
             return Err(anyhow!("Empty message"));
         }
-
+    
         let message_type_byte = message[0];
         let payload = &message[1..];
-
+    
         match message_type_byte {
             MESSAGE_TYPE_JOIN_GROUP => {
                 let request: JoinGroupRequest = serde_cbor::from_slice(payload)?;
-                let response = self.join_group(request).await?;
+                let response = self.join_group(request).await;
                 self.send_response(call_id.into(), MESSAGE_TYPE_JOIN_GROUP, &response)
                     .await?;
             }
             MESSAGE_TYPE_LIST_GROUPS => {
-                let response = self.list_groups().await?;
+                let response = self.list_groups().await;
                 self.send_response(call_id.into(), MESSAGE_TYPE_LIST_GROUPS, &response)
                     .await?;
             }
             MESSAGE_TYPE_REMOVE_GROUP => {
                 let request: RemoveGroupRequest = serde_cbor::from_slice(payload)?;
-                let response = self.remove_group(request).await?;
+                let response = self.remove_group(request).await;
                 self.send_response(call_id.into(), MESSAGE_TYPE_REMOVE_GROUP, &response)
                     .await?;
             }
             _ => {
                 error!("Unknown message type: {}", message_type_byte);
-                self.send_response(call_id.into(), MESSAGE_TYPE_ERROR, b"Unknown message type")
+                let error_response: RpcResponse<()> = RpcResponse {
+                    success: None,
+                    error: Some("Unknown message type".to_string()),
+                };
+                self.send_response(call_id.into(), MESSAGE_TYPE_ERROR, &error_response)
                     .await?;
             }
         }
-
+    
         Ok(())
     }
-
+    
     async fn send_response<T: Serialize>(
         &self,
         call_id: u64,
         message_type: u8,
-        response: &T,
+        response: &RpcResponse<T>,
     ) -> Result<()> {
         let mut response_buf = vec![message_type];
         let payload = serde_cbor::to_vec(response)?;
@@ -416,59 +426,102 @@ impl RpcService {
         Ok(())
     }
 
-    pub async fn join_group(&self, request: JoinGroupRequest) -> Result<JoinGroupResponse> {
+    pub async fn join_group(&self, request: JoinGroupRequest) -> RpcResponse<JoinGroupResponse> {
         let group_url = request.group_url;
         info!("Joining group with URL: {}", group_url);
 
         // Use the backend to join the group from the provided URL
         let backend = self.backend.clone();
-        let group = backend.join_from_url(&group_url).await?;
 
-        // Fetch the list of repositories in the group
-        let repo_keys: Vec<CryptoKey> = group.list_repos().await;
+        match backend.join_from_url(&group_url).await {
+            Ok(group) => {
+                let repo_keys: Vec<CryptoKey> = group.list_repos().await;
 
-        for repo_key in repo_keys {
-            info!("Processing repository with crypto key: {:?}", repo_key);
+                for repo_key in repo_keys {
+                    if let Ok(repo) = group.get_repo(&repo_key).await {
+                        if let Err(err) = replicate_repo(&group, &repo).await {
+                            error!("Failed to replicate repository: {:?}", err);
+                        }
+                    }
+                }
 
-            // Get the repository from the group
-            let repo = group.get_repo(&repo_key).await?;
-            // Replicate the repository
-            replicate_repo(&group, &repo).await?;
+                RpcResponse {
+                    success: Some(JoinGroupResponse {
+                        status_message: format!(
+                            "Successfully joined and replicated group from URL: {}",
+                            group_url
+                        ),
+                    }),
+                    error: None,
+                }
+            }
+            Err(err) => RpcResponse {
+                success: None,
+                error: Some(format!("Failed to join group: {}", err)),
+            },
         }
-
-        Ok(JoinGroupResponse {
-            status_message: format!(
-                "Successfully joined and replicated group from URL: {}",
-                group_url
-            ),
-        })
     }
 
-    pub async fn list_groups(&self) -> Result<ListGroupsResponse> {
+    pub async fn list_groups(&self) -> RpcResponse<ListGroupsResponse> {
         let backend = self.backend.clone();
-        let groups = backend.list_groups().await?;
 
-        let group_ids: Vec<String> = groups.iter().map(|g| g.id().to_string()).collect();
-
-        Ok(ListGroupsResponse { group_ids })
+        match backend.list_groups().await {
+            Ok(groups) => RpcResponse {
+                success: Some(ListGroupsResponse {
+                    group_ids: groups.iter().map(|g| g.id().to_string()).collect(),
+                }),
+                error: None,
+            },
+            Err(err) => RpcResponse {
+                success: None,
+                error: Some(format!("Failed to list groups: {}", err)),
+            },
+        }
     }
 
-    pub async fn remove_group(&self, request: RemoveGroupRequest) -> Result<RemoveGroupResponse> {
+    pub async fn remove_group(
+        &self,
+        request: RemoveGroupRequest,
+    ) -> RpcResponse<RemoveGroupResponse> {
         let group_id = request.group_id;
         info!("Removing group with ID: {}", group_id);
 
-        let group_bytes = URL_SAFE_NO_PAD.decode(&group_id)?;
-        let group_bytes: [u8; 32] = group_bytes
-            .try_into()
-            .map_err(|v: Vec<u8>| anyhow!("Expected 32 bytes, got {}", v.len()))?;
+        let backend = self.backend.clone();
+
+        let group_bytes = match URL_SAFE_NO_PAD.decode(&group_id) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                return RpcResponse {
+                    success: None,
+                    error: Some(format!("Failed to decode group ID: {}", err)),
+                };
+            }
+        };
+
+        let group_bytes: [u8; 32] = match group_bytes.try_into() {
+            Ok(bytes) => bytes,
+            Err(v) => {
+                return RpcResponse {
+                    success: None,
+                    error: Some(format!("Expected 32 bytes, got {}", v.len())),
+                };
+            }
+        };
+
         let group_key = CryptoKey::new(group_bytes);
 
-        let backend = self.backend.clone();
-        backend.close_group(group_key).await?;
-
-        Ok(RemoveGroupResponse {
-            status_message: format!("Successfully removed group: {}", group_id),
-        })
+        match backend.close_group(group_key).await {
+            Ok(_) => RpcResponse {
+                success: Some(RemoveGroupResponse {
+                    status_message: format!("Successfully removed group: {}", group_id),
+                }),
+                error: None,
+            },
+            Err(err) => RpcResponse {
+                success: None,
+                error: Some(format!("Failed to remove group: {}", err)),
+            },
+        }
     }
 
     pub async fn replicate_known_groups(&self) -> Result<()> {
