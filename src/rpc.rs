@@ -94,7 +94,7 @@ impl RpcClient {
         })
     }
 
-    pub async fn join_group(&self, group_url: String) -> Result<()> {
+    pub async fn join_group(&self, group_url: String) -> Result<JoinGroupResponse> {
         let request = JoinGroupRequest { group_url };
         let message = serde_cbor::to_vec(&request)?;
 
@@ -102,9 +102,13 @@ impl RpcClient {
         let route_id = self.veilid.import_remote_private_route(blob)?;
         let target = Target::PrivateRoute(route_id);
 
-        // TODO: Parse response
-        self.routing_context.app_call(target, message).await?;
-        Err(anyhow!("Not implemented"))
+        // Send the app call and wait for the response
+        let response = self.routing_context.app_call(target, message).await?;
+
+        // Parse the response
+        let response: JoinGroupResponse = serde_cbor::from_slice(&response)?;
+
+        Ok(response)
     }
 
     pub async fn list_groups(&self) -> Result<Vec<String>> {
