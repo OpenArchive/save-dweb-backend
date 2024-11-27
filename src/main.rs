@@ -55,33 +55,33 @@ async fn main() -> anyhow::Result<()> {
             Arg::new("backend_url")
                 .long("backend-url")
                 .help("URL of the backend")
-                .required(true),
+                .required(false),
         )
         .subcommand(
             Command::new("join")
                 .about("Join a group")
                 .arg(
-            Arg::new("group_url")
-                .long("group-url")
-                .help("URL of the group to join")
-                .required(true),
+                    Arg::new("group_url")
+                        .long("group-url")
+                        .help("URL of the group to join")
+                        .required(true),
                 ),
         )
         .subcommand(
             Command::new("remove")
                 .about("Remove a group")
                 .arg(
-            Arg::new("group_id")
-                .long("group-id")
-                .help("ID of the group to remove")
-                .required(true),
+                    Arg::new("group_id")
+                        .long("group-id")
+                        .help("ID of the group to remove")
+                        .required(true),
                 ),
         )
         .subcommand(Command::new("list").about("List known groups"))
         .subcommand(Command::new("start").about("Start the RPC service and log the URL"))
         .get_matches();
 
-    let backend_url = matches.get_one::<String>("backend_url").unwrap();
+    let backend_url = matches.get_one::<String>("backend_url");
 
     let xdg_dirs = BaseDirectories::with_prefix("save-dweb-backend")?;
     let base_dir = xdg_dirs.get_data_home();
@@ -111,44 +111,59 @@ async fn main() -> anyhow::Result<()> {
     } else {
         match matches.subcommand() {
             Some(("join", sub_matches)) => {
-                let (veilid_api, _update_rx) =
-                    init_veilid(&base_dir, "save-dweb-backend".to_string()).await?;
-    
-                let group_url = sub_matches.get_one::<String>("group_url").unwrap();
-                println!("Joining group: {}", group_url);
-    
-                // Pass initialized Veilid to the RPC client
-                let rpc_client = RpcClient::from_veilid(veilid_api.clone(), backend_url).await?;
-                rpc_client.join_group(group_url.to_string()).await?;
-                println!("Successfully joined group.");
+                if let Some(backend_url) = backend_url {
+                    let (veilid_api, _update_rx) =
+                        init_veilid(&base_dir, "save-dweb-backend".to_string()).await?;
+
+                    let group_url = sub_matches.get_one::<String>("group_url").unwrap();
+                    println!("Joining group: {}", group_url);
+
+                    // Pass initialized Veilid to the RPC client
+                    let rpc_client =
+                        RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
+                    rpc_client.join_group(group_url.to_string()).await?;
+                    println!("Successfully joined group.");
+                } else {
+                    eprintln!("Error: --backend-url is required for the 'join' command");
+                    std::process::exit(1);
+                }
             }
             Some(("list", _)) => {
-                let (veilid_api, _update_rx) =
-                    init_veilid(&base_dir, "save-dweb-backend".to_string()).await?;
-    
-                println!("Listing all groups...");
-                let rpc_client = RpcClient::from_veilid(veilid_api.clone(), backend_url).await?;
-                let response = rpc_client.list_groups().await?;
-                for group_id in response.group_ids {
-                    println!("Group ID: {}", group_id);
+                if let Some(backend_url) = backend_url {
+                    let (veilid_api, _update_rx) =
+                        init_veilid(&base_dir, "save-dweb-backend".to_string()).await?;
+
+                    println!("Listing all groups...");
+                    let rpc_client =
+                        RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
+                    let response = rpc_client.list_groups().await?;
+                    for group_id in response.group_ids {
+                        println!("Group ID: {}", group_id);
+                    }
+                } else {
+                    eprintln!("Error: --backend-url is required for the 'list' command");
+                    std::process::exit(1);
                 }
             }
             Some(("remove", sub_matches)) => {
-                let (veilid_api, _update_rx) =
-                    init_veilid(&base_dir, "save-dweb-backend".to_string()).await?;
-    
-                let group_id = sub_matches.get_one::<String>("group_id").unwrap();
-                println!("Removing group: {}", group_id);
-    
-                // Pass initialized Veilid to the RPC client
-                let rpc_client = RpcClient::from_veilid(veilid_api.clone(), backend_url).await?;
-                rpc_client.remove_group(group_id.to_string()).await?;
-                println!("Successfully removed group.");
+                if let Some(backend_url) = backend_url {
+                    let (veilid_api, _update_rx) =
+                        init_veilid(&base_dir, "save-dweb-backend".to_string()).await?;
+
+                    let group_id = sub_matches.get_one::<String>("group_id").unwrap();
+                    println!("Removing group: {}", group_id);
+
+                    // Pass initialized Veilid to the RPC client
+                    let rpc_client =
+                        RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
+                    rpc_client.remove_group(group_id.to_string()).await?;
+                    println!("Successfully removed group.");
+                } else {
+                    eprintln!("Error: --backend-url is required for the 'remove' command");
+                    std::process::exit(1);
+                }
             }
             Some(("start", _)) => {
-                let (veilid_api, _update_rx) =
-                    init_veilid(&base_dir, "save-dweb-backend".to_string()).await?;
-    
                 backend.start().await?;
                 let rpc_service = RpcService::from_backend(&backend).await?;
                 println!("RPC service started at URL: {}", rpc_service.get_descriptor_url());
