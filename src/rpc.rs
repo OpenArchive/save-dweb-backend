@@ -1,4 +1,5 @@
 use crate::backend::Backend;
+use crate::backend::parse_url;
 use crate::common::{CommonKeypair, DHTEntity};
 use crate::group::Group;
 use crate::repo::{Repo, ROUTE_SUBKEY};
@@ -24,7 +25,7 @@ use url::Url;
 use veilid_core::{
     vld0_generate_keypair, CryptoKey, CryptoSystem, CryptoSystemVLD0, DHTRecordDescriptor,
     DHTSchema, RoutingContext, SharedSecret, Target, VeilidAPI, VeilidAppCall, VeilidUpdate,
-    CRYPTO_KIND_VLD0,
+    CRYPTO_KIND_VLD0, KeyPair, TypedKey,
 };
 use veilid_iroh_blobs::tunnels::OnNewRouteCallback;
 
@@ -163,7 +164,37 @@ impl RpcServiceDescriptor {
         crypto_system: CryptoSystemVLD0,
         url: &str,
     ) -> Result<Self> {
-        Err(anyhow!("Not implemented"))
+        let keys = parse_url(url)?;
+
+        let record_key = TypedKey::new(CRYPTO_KIND_VLD0, keys.id);
+
+        let dht_record = routing_context
+            .open_dht_record(record_key.clone(), None)
+            .await
+            .map_err(|e| anyhow!("Failed to open DHT record: {}", e))?;
+
+        let owner_key = dht_record.owner();
+
+        let dht_record = routing_context
+            .open_dht_record(
+                record_key,
+                Some(KeyPair::new(
+                    owner_key.clone(),
+                    keys.secret_key.clone().ok_or_else(|| {
+                        anyhow!("Secret key is required to open the DHT record with write access")
+                    })?,
+                )),
+            )
+            .await
+            .map_err(|e| anyhow!("Failed to reopen DHT record with writer: {}", e))?;
+
+        // Construct the `RpcServiceDescriptor`
+        Ok(RpcServiceDescriptor {
+            keypair: keys,
+            routing_context,
+            crypto_system,
+            dht_record,
+        })
     }
 
     pub fn get_url(&self) -> String {
