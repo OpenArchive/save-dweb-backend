@@ -38,20 +38,6 @@ enum Commands {
 async fn main() -> anyhow::Result<()> {
     let matches = Command::new("Save DWeb Backend")
         .arg(
-            Arg::new("rpc")
-                .long("rpc")
-                .help("Starts the RPC backup server")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("rpc_addr")
-                .long("rpc-addr")
-                .value_name("RPC_ADDR")
-                .help("Sets the address for the RPC server")
-                .default_value("127.0.0.1:50051")
-                .value_parser(clap::value_parser!(String)),
-        )
-        .arg(
             Arg::new("backend_url")
                 .long("backend-url")
                 .help("URL of the backend")
@@ -93,86 +79,67 @@ async fn main() -> anyhow::Result<()> {
 
     let mut backend = Backend::new(&base_dir)?;
 
-    if matches.get_flag("rpc") {
-        // If --rpc is passed, start the RPC server only
-        let rpc_addr = matches.get_one::<String>("rpc_addr").unwrap();
-        println!("Starting RPC server on {}", rpc_addr);
-
-        // Start the backend to initialize necessary components
-        backend.start().await?;
-
-        // Create RPC service
-        let rpc_service = RpcService::from_backend(&backend).await?;
-
-        // Initialize and replicate all known groups
-        rpc_service.replicate_known_groups().await?;
-
-        // Start the update listener
-        rpc_service.start_update_listener().await?;
-    } else {
-        match matches.subcommand() {
-            Some(("join", sub_matches)) => {
-                let backend_url = matches.get_one::<String>("backend_url").ok_or_else(|| {
-                    anyhow!("Error: --backend-url is required for the 'join' command")
-                })?;
-        
-                let (veilid_api, _update_rx) =
-                    init_veilid(&base_dir, "save-dweb-backup".to_string()).await?;
-        
-                let group_url = sub_matches.get_one::<String>("group_url").unwrap();
-                println!("Joining group: {}", group_url);
-        
-                let rpc_client =
-                    RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
-                rpc_client.join_group(group_url.to_string()).await?;
-                println!("Successfully joined group.");
-            }
-            Some(("list", _)) => {
-                let backend_url = matches.get_one::<String>("backend_url").ok_or_else(|| {
-                    anyhow!("Error: --backend-url is required for the 'list' command")
-                })?;
-        
-                let (veilid_api, _update_rx) =
-                    init_veilid(&base_dir, "save-dweb-backup".to_string()).await?;
-        
-                println!("Listing all groups...");
-                let rpc_client =
-                    RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
-                let response = rpc_client.list_groups().await?;
-                for group_id in response.group_ids {
-                    println!("Group ID: {}", group_id);
-                }
-            }
-            Some(("remove", sub_matches)) => {
-                let backend_url = matches.get_one::<String>("backend_url").ok_or_else(|| {
-                    anyhow!("Error: --backend-url is required for the 'remove' command")
-                })?;
-        
-                let (veilid_api, _update_rx) =
-                    init_veilid(&base_dir, "save-dweb-backup".to_string()).await?;
-        
-                let group_id = sub_matches.get_one::<String>("group_id").unwrap();
-                println!("Removing group: {}", group_id);
-        
-                let rpc_client =
-                    RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
-                rpc_client.remove_group(group_id.to_string()).await?;
-                println!("Successfully removed group.");
-            }
-            Some(("start", _)) => {
-                backend.start().await?;
-                let rpc_service = RpcService::from_backend(&backend).await?;
-                println!("RPC service started at URL: {}", rpc_service.get_descriptor_url());
-                rpc_service.start_update_listener().await?;
-            }
-            _ => {
-                // Otherwise, start the normal backend and group operations
-                backend.start().await?;
-                tokio::signal::ctrl_c().await?;
-                backend.stop().await?;
+    match matches.subcommand() {
+        Some(("join", sub_matches)) => {
+            let backend_url = matches.get_one::<String>("backend_url").ok_or_else(|| {
+                anyhow!("Error: --backend-url is required for the 'join' command")
+            })?;
+    
+            let (veilid_api, _update_rx) =
+                init_veilid(&base_dir, "save-dweb-backup".to_string()).await?;
+    
+            let group_url = sub_matches.get_one::<String>("group_url").unwrap();
+            println!("Joining group: {}", group_url);
+    
+            let rpc_client =
+                RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
+            rpc_client.join_group(group_url.to_string()).await?;
+            println!("Successfully joined group.");
+        }
+        Some(("list", _)) => {
+            let backend_url = matches.get_one::<String>("backend_url").ok_or_else(|| {
+                anyhow!("Error: --backend-url is required for the 'list' command")
+            })?;
+    
+            let (veilid_api, _update_rx) =
+                init_veilid(&base_dir, "save-dweb-backup".to_string()).await?;
+    
+            println!("Listing all groups...");
+            let rpc_client =
+                RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
+            let response = rpc_client.list_groups().await?;
+            for group_id in response.group_ids {
+                println!("Group ID: {}", group_id);
             }
         }
+        Some(("remove", sub_matches)) => {
+            let backend_url = matches.get_one::<String>("backend_url").ok_or_else(|| {
+                anyhow!("Error: --backend-url is required for the 'remove' command")
+            })?;
+    
+            let (veilid_api, _update_rx) =
+                init_veilid(&base_dir, "save-dweb-backup".to_string()).await?;
+    
+            let group_id = sub_matches.get_one::<String>("group_id").unwrap();
+            println!("Removing group: {}", group_id);
+    
+            let rpc_client =
+                RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
+            rpc_client.remove_group(group_id.to_string()).await?;
+            println!("Successfully removed group.");
+        }
+        Some(("start", _)) => {
+            backend.start().await?;
+            let rpc_service = RpcService::from_backend(&backend).await?;
+            println!("RPC service started at URL: {}", rpc_service.get_descriptor_url());
+            rpc_service.start_update_listener().await?;
+        }
+        _ => {
+            // Otherwise, start the normal backend and group operations
+            backend.start().await?;
+            tokio::signal::ctrl_c().await?;
+            backend.stop().await?;
+        }
     }
-
     Ok(())
 }
