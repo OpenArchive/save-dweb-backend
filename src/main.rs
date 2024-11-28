@@ -34,6 +34,15 @@ enum Commands {
     Start,
 }
 
+async fn setup_rpc_client(
+    base_dir: &std::path::Path,
+    backend_url: &str,
+) -> anyhow::Result<RpcClient> {
+    let (veilid_api, _update_rx) = init_veilid(base_dir, "save-dweb-backup".to_string()).await?;
+    RpcClient::from_veilid(veilid_api, backend_url).await
+}
+
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let matches = Command::new("Save DWeb Backend")
@@ -85,14 +94,11 @@ async fn main() -> anyhow::Result<()> {
                 anyhow!("Error: --backend-url is required for the 'join' command")
             })?;
     
-            let (veilid_api, _update_rx) =
-                init_veilid(&base_dir, "save-dweb-backup".to_string()).await?;
-    
             let group_url = sub_matches.get_one::<String>("group_url").unwrap();
             println!("Joining group: {}", group_url);
+
+            let rpc_client = setup_rpc_client(&base_dir, backend_url).await?;
     
-            let rpc_client =
-                RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
             rpc_client.join_group(group_url.to_string()).await?;
             println!("Successfully joined group.");
         }
@@ -101,12 +107,10 @@ async fn main() -> anyhow::Result<()> {
                 anyhow!("Error: --backend-url is required for the 'list' command")
             })?;
     
-            let (veilid_api, _update_rx) =
-                init_veilid(&base_dir, "save-dweb-backup".to_string()).await?;
-    
             println!("Listing all groups...");
-            let rpc_client =
-                RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
+
+            let rpc_client = setup_rpc_client(&base_dir, backend_url).await?;
+
             let response = rpc_client.list_groups().await?;
             for group_id in response.group_ids {
                 println!("Group ID: {}", group_id);
@@ -117,14 +121,11 @@ async fn main() -> anyhow::Result<()> {
                 anyhow!("Error: --backend-url is required for the 'remove' command")
             })?;
     
-            let (veilid_api, _update_rx) =
-                init_veilid(&base_dir, "save-dweb-backup".to_string()).await?;
-    
             let group_id = sub_matches.get_one::<String>("group_id").unwrap();
             println!("Removing group: {}", group_id);
-    
-            let rpc_client =
-                RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
+
+            let rpc_client = setup_rpc_client(&base_dir, backend_url).await?;
+
             rpc_client.remove_group(group_id.to_string()).await?;
             println!("Successfully removed group.");
         }
