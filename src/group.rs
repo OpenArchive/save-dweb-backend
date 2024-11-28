@@ -312,6 +312,15 @@ impl Group {
 
         let mut repo_id_buffer: [u8; CRYPTO_KEY_LENGTH] = [0; CRYPTO_KEY_LENGTH];
 
+        // Validate the length before copying
+        if repo_id_raw.data().len() != repo_id_buffer.len() {
+            return Err(anyhow!(
+                "Slice length mismatch: expected {}, got {}",
+                repo_id_buffer.len(),
+                repo_id_raw.data().len()
+            ));
+        }
+
         repo_id_buffer.copy_from_slice(repo_id_raw.data());
 
         let repo_id = TypedKey::new(CRYPTO_KIND_VLD0, CryptoKey::from(repo_id_buffer));
