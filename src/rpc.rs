@@ -1,6 +1,5 @@
-use crate::backend::Backend;
-use crate::backend::parse_url;
-use crate::common::{CommonKeypair, DHTEntity};
+use crate::backend::{Backend, crypto_key_from_query};
+use crate::common::{DHTEntity};
 use crate::group::Group;
 use crate::repo::{Repo, ROUTE_SUBKEY};
 use crate::{
@@ -174,8 +173,14 @@ impl RpcClient {
 }
 
 #[derive(Clone)]
+pub struct RpcKeys {
+    pub dht_key: CryptoKey,
+    pub encryption_key: SharedSecret,
+}
+
+#[derive(Clone)]
 pub struct RpcServiceDescriptor {
-    keypair: CommonKeypair,
+    keypair: RpcKeys,
     routing_context: RoutingContext,
     crypto_system: CryptoSystemVLD0,
     dht_record: DHTRecordDescriptor,
@@ -187,9 +192,9 @@ impl RpcServiceDescriptor {
         crypto_system: CryptoSystemVLD0,
         url: &str,
     ) -> Result<Self> {
-        let keys = parse_url(url)?;
+        let keys = parse_url_for_rpc(url)?;
 
-        let record_key = TypedKey::new(CRYPTO_KIND_VLD0, keys.id);
+        let record_key = TypedKey::new(CRYPTO_KIND_VLD0, keys.dht_key);
 
         let dht_record = routing_context
             .open_dht_record(record_key.clone(), None)
@@ -198,20 +203,6 @@ impl RpcServiceDescriptor {
 
         let owner_key = dht_record.owner();
 
-        let dht_record = routing_context
-            .open_dht_record(
-                record_key,
-                Some(KeyPair::new(
-                    owner_key.clone(),
-                    keys.secret_key.clone().ok_or_else(|| {
-                        anyhow!("Secret key is required to open the DHT record with write access")
-                    })?,
-                )),
-            )
-            .await
-            .map_err(|e| anyhow!("Failed to reopen DHT record with writer: {}", e))?;
-
-        // Construct the `RpcServiceDescriptor`
         Ok(RpcServiceDescriptor {
             keypair: keys,
             routing_context,
@@ -281,10 +272,8 @@ impl RpcService {
 
         let encryption_key = crypto_system.random_shared_secret();
 
-        let keypair = CommonKeypair {
-            id: dht_record.key().value.clone(),
-            public_key: dht_record.owner().clone(),
-            secret_key: dht_record.owner_secret().cloned(),
+        let keypair = RpcKeys {
+            dht_key: dht_record.key().value.clone(),
             encryption_key,
         };
 
@@ -645,11 +634,11 @@ impl DHTEntity for RpcServiceDescriptor {
     }
 
     fn get_id(&self) -> CryptoKey {
-        self.keypair.id.clone()
+        self.keypair.dht_key.clone()
     }
 
     fn get_secret_key(&self) -> Option<CryptoKey> {
-        self.keypair.secret_key.clone()
+        None
     }
 
     fn get_encryption_key(&self) -> SharedSecret {
