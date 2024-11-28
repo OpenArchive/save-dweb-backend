@@ -30,6 +30,7 @@ mod tests {
     use anyhow::Result;
     use bytes::Bytes;
     use common::init_veilid;
+    use rpc::RpcClient;
     use rpc::RpcService;
     use std::path::Path;
     use std::result;
@@ -1349,6 +1350,43 @@ mod tests {
         let rpc_instance = RpcService::from_backend(&backend).await?;
 
         backend.stop().await.expect("Unable to stop backend");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_rpc_client() -> Result<()> {
+        // Setup temporary directory and initialize the backend
+        let path = TmpDir::new("test_backend_collection_hash_consistency")
+            .await
+            .unwrap();
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
+        let (veilid2, _) = init_veilid(
+            &path.to_path_buf().join("client"),
+            "save-dweb-backup".to_string(),
+        )
+        .await?;
+
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        let rpc_instance = RpcService::from_backend(&backend).await?;
+
+        let url = rpc_instance.get_descriptor_url();
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let client = RpcClient::from_veilid(veilid2.clone(), &url).await?;
+
+        let list = client.list_groups().await?;
+
+        assert_eq!(list.group_ids.len(), 0, "No groups on init");
+
+        backend.stop().await.expect("Unable to stop backend");
+        veilid2.shutdown().await;
         Ok(())
     }
 }

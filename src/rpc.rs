@@ -1,7 +1,7 @@
-use crate::backend::{Backend, crypto_key_from_query};
-use crate::common::{DHTEntity};
+use crate::backend::{crypto_key_from_query, Backend};
+use crate::common::DHTEntity;
 use crate::group::Group;
-use crate::repo::{Repo, ROUTE_SUBKEY};
+use crate::repo::Repo;
 use crate::{
     constants::ROUTE_ID_DHT_KEY,
     group::{PROTOCOL_SCHEME, URL_DHT_KEY, URL_ENCRYPTION_KEY},
@@ -23,8 +23,8 @@ use tracing::{error, info};
 use url::Url;
 use veilid_core::{
     vld0_generate_keypair, CryptoKey, CryptoSystem, CryptoSystemVLD0, DHTRecordDescriptor,
-    DHTSchema, RoutingContext, SharedSecret, Target, VeilidAPI, VeilidAppCall, VeilidUpdate,
-    CRYPTO_KIND_VLD0, KeyPair, TypedKey,
+    DHTSchema, KeyPair, RoutingContext, SharedSecret, Target, TypedKey, VeilidAPI, VeilidAppCall,
+    VeilidUpdate, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::tunnels::OnNewRouteCallback;
 
@@ -32,6 +32,8 @@ const MESSAGE_TYPE_JOIN_GROUP: u8 = 0x00;
 const MESSAGE_TYPE_LIST_GROUPS: u8 = 0x01;
 const MESSAGE_TYPE_REMOVE_GROUP: u8 = 0x02;
 const MESSAGE_TYPE_ERROR: u8 = 0xFF;
+
+const ROUTE_SUBKEY: u32 = 1;
 
 #[repr(u8)]
 #[derive(Serialize, Deserialize)]
@@ -102,7 +104,6 @@ pub fn parse_url_for_rpc(url_string: &str) -> Result<RpcKeys> {
     })
 }
 
-
 impl RpcClient {
     pub async fn from_veilid(veilid: VeilidAPI, url: &str) -> Result<Self> {
         let routing_context = veilid.routing_context()?;
@@ -157,19 +158,21 @@ impl RpcClient {
 
     pub async fn join_group(&self, group_url: String) -> Result<JoinGroupResponse> {
         let request = JoinGroupRequest { group_url };
-        self.send_rpc_request(&request, MESSAGE_TYPE_JOIN_GROUP).await
+        self.send_rpc_request(&request, MESSAGE_TYPE_JOIN_GROUP)
+            .await
     }
-    
+
     pub async fn list_groups(&self) -> Result<ListGroupsResponse> {
         let request = ListGroupsRequest;
-        self.send_rpc_request(&request, MESSAGE_TYPE_LIST_GROUPS).await
+        self.send_rpc_request(&request, MESSAGE_TYPE_LIST_GROUPS)
+            .await
     }
 
     pub async fn remove_group(&self, group_id: String) -> Result<RemoveGroupResponse> {
         let request = RemoveGroupRequest { group_id };
-        self.send_rpc_request(&request, MESSAGE_TYPE_REMOVE_GROUP).await
+        self.send_rpc_request(&request, MESSAGE_TYPE_REMOVE_GROUP)
+            .await
     }
-    
 }
 
 #[derive(Clone)]
@@ -302,8 +305,8 @@ impl RpcService {
             });
         });
 
-        // Log the descriptor URL
-        let descriptor_url = descriptor.get_url();
+        let route_id_blob = backend.get_route_id_blob().await?;
+        descriptor.update_route_on_dht(route_id_blob).await?;
 
         Ok(RpcService {
             backend,
@@ -333,19 +336,23 @@ impl RpcService {
 
                         if let Err(e) = self.handle_app_call(*app_call).await {
                             error!("Error processing AppCall: {}", e);
-                        
+
                             // Wrap the error in RpcResponse and send it
                             let error_response: RpcResponse<()> = RpcResponse {
                                 success: None,
                                 error: Some(e.to_string()),
                             };
                             if let Err(err) = self
-                                .send_response(app_call_clone.id().into(), MESSAGE_TYPE_ERROR, &error_response)
+                                .send_response(
+                                    app_call_clone.id().into(),
+                                    MESSAGE_TYPE_ERROR,
+                                    &error_response,
+                                )
                                 .await
                             {
                                 error!("Failed to send error response: {}", err);
                             }
-                        }                        
+                        }
                     }
                 }
                 Err(RecvError::Lagged(count)) => {
@@ -360,11 +367,11 @@ impl RpcService {
 
         Ok(())
     }
-    
+
     async fn handle_app_call(&self, app_call: VeilidAppCall) -> Result<()> {
         let call_id = app_call.id();
         let message = app_call.message();
-    
+
         if message.is_empty() {
             let error_response: RpcResponse<()> = RpcResponse {
                 success: None,
@@ -374,10 +381,10 @@ impl RpcService {
                 .await?;
             return Err(anyhow!("Empty message"));
         }
-    
+
         let message_type_byte = message[0];
         let payload = &message[1..];
-    
+
         match message_type_byte {
             MESSAGE_TYPE_JOIN_GROUP => {
                 let request: JoinGroupRequest = serde_cbor::from_slice(payload)?;
@@ -406,10 +413,10 @@ impl RpcService {
                     .await?;
             }
         }
-    
+
         Ok(())
     }
-    
+
     async fn send_response<T: Serialize>(
         &self,
         call_id: u64,
@@ -634,7 +641,7 @@ impl DHTEntity for RpcServiceDescriptor {
     }
 
     fn get_id(&self) -> CryptoKey {
-        self.keypair.dht_key.clone()
+        self.dht_record.key().value.clone()
     }
 
     fn get_secret_key(&self) -> Option<CryptoKey> {

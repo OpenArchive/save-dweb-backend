@@ -283,6 +283,14 @@ impl Backend {
         self.join_group(keys).await
     }
 
+    pub async fn get_route_id_blob(&self) -> Result<Vec<u8>> {
+        if let Some(blobs) = self.get_iroh_blobs().await {
+            Ok(blobs.route_id_blob().await)
+        } else {
+            Err(anyhow!("Veilid not initialized"))
+        }
+    }
+
     pub async fn join_group(&self, keys: CommonKeypair) -> Result<Box<Group>> {
         let mut inner = self.inner.lock().await;
 
