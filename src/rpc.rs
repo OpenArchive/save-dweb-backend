@@ -89,6 +89,21 @@ pub struct RpcClient {
     descriptor: RpcServiceDescriptor,
 }
 
+pub fn parse_url_for_rpc(url_string: &str) -> Result<RpcKeys> {
+    let url = Url::parse(url_string)?;
+
+    let dht_key = crypto_key_from_query(&url, URL_DHT_KEY)
+        .map_err(|_| anyhow!("Missing 'dht' key in the URL"))?;
+    let encryption_key = crypto_key_from_query(&url, URL_ENCRYPTION_KEY)
+        .map_err(|_| anyhow!("Missing 'enc' key in the URL"))?;
+
+    Ok(RpcKeys {
+        dht_key,
+        encryption_key,
+    })
+}
+
+
 impl RpcClient {
     pub async fn from_veilid(veilid: VeilidAPI, url: &str) -> Result<Self> {
         let routing_context = veilid.routing_context()?;
