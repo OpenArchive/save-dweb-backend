@@ -112,57 +112,52 @@ async fn main() -> anyhow::Result<()> {
     } else {
         match matches.subcommand() {
             Some(("join", sub_matches)) => {
-                if let Some(backend_url) = backend_url {
-                    let (veilid_api, _update_rx) =
-                        init_veilid(&base_dir, "save-dweb-backend".to_string()).await?;
-
-                    let group_url = sub_matches.get_one::<String>("group_url").unwrap();
-                    println!("Joining group: {}", group_url);
-
-                    // Pass initialized Veilid to the RPC client
-                    let rpc_client =
-                        RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
-                    rpc_client.join_group(group_url.to_string()).await?;
-                    println!("Successfully joined group.");
-                } else {
-                    eprintln!("Error: --backend-url is required for the 'join' command");
-                    std::process::exit(1);
-                }
+                let backend_url = matches.get_one::<String>("backend_url").ok_or_else(|| {
+                    anyhow!("Error: --backend-url is required for the 'join' command")
+                })?;
+        
+                let (veilid_api, _update_rx) =
+                    init_veilid(&base_dir, "save-dweb-backup".to_string()).await?;
+        
+                let group_url = sub_matches.get_one::<String>("group_url").unwrap();
+                println!("Joining group: {}", group_url);
+        
+                let rpc_client =
+                    RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
+                rpc_client.join_group(group_url.to_string()).await?;
+                println!("Successfully joined group.");
             }
             Some(("list", _)) => {
-                if let Some(backend_url) = backend_url {
-                    let (veilid_api, _update_rx) =
-                        init_veilid(&base_dir, "save-dweb-backend".to_string()).await?;
-
-                    println!("Listing all groups...");
-                    let rpc_client =
-                        RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
-                    let response = rpc_client.list_groups().await?;
-                    for group_id in response.group_ids {
-                        println!("Group ID: {}", group_id);
-                    }
-                } else {
-                    eprintln!("Error: --backend-url is required for the 'list' command");
-                    std::process::exit(1);
+                let backend_url = matches.get_one::<String>("backend_url").ok_or_else(|| {
+                    anyhow!("Error: --backend-url is required for the 'list' command")
+                })?;
+        
+                let (veilid_api, _update_rx) =
+                    init_veilid(&base_dir, "save-dweb-backup".to_string()).await?;
+        
+                println!("Listing all groups...");
+                let rpc_client =
+                    RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
+                let response = rpc_client.list_groups().await?;
+                for group_id in response.group_ids {
+                    println!("Group ID: {}", group_id);
                 }
             }
             Some(("remove", sub_matches)) => {
-                if let Some(backend_url) = backend_url {
-                    let (veilid_api, _update_rx) =
-                        init_veilid(&base_dir, "save-dweb-backend".to_string()).await?;
-
-                    let group_id = sub_matches.get_one::<String>("group_id").unwrap();
-                    println!("Removing group: {}", group_id);
-
-                    // Pass initialized Veilid to the RPC client
-                    let rpc_client =
-                        RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
-                    rpc_client.remove_group(group_id.to_string()).await?;
-                    println!("Successfully removed group.");
-                } else {
-                    eprintln!("Error: --backend-url is required for the 'remove' command");
-                    std::process::exit(1);
-                }
+                let backend_url = matches.get_one::<String>("backend_url").ok_or_else(|| {
+                    anyhow!("Error: --backend-url is required for the 'remove' command")
+                })?;
+        
+                let (veilid_api, _update_rx) =
+                    init_veilid(&base_dir, "save-dweb-backup".to_string()).await?;
+        
+                let group_id = sub_matches.get_one::<String>("group_id").unwrap();
+                println!("Removing group: {}", group_id);
+        
+                let rpc_client =
+                    RpcClient::from_veilid(veilid_api.clone(), backend_url.as_str()).await?;
+                rpc_client.remove_group(group_id.to_string()).await?;
+                println!("Successfully removed group.");
             }
             Some(("start", _)) => {
                 backend.start().await?;
