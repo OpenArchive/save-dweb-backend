@@ -530,7 +530,7 @@ fn find_query(url: &Url, key: &str) -> Result<String> {
     Err(anyhow!("Unable to find parameter {} in URL {:?}", key, url))
 }
 
-fn crypto_key_from_query(url: &Url, key: &str) -> Result<CryptoKey> {
+pub fn crypto_key_from_query(url: &Url, key: &str) -> Result<CryptoKey> {
     let value = find_query(url, key)?;
     let bytes = hex::decode(value)?;
     let mut key_vec: [u8; CRYPTO_KEY_LENGTH] = [0; CRYPTO_KEY_LENGTH];
