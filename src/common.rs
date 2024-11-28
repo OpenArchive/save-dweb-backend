@@ -75,7 +75,7 @@ pub async fn init_veilid(
 }
 
 pub fn config_for_dir(base_dir: PathBuf, namespace: String) -> VeilidConfigInner {
-    return VeilidConfigInner {
+    VeilidConfigInner {
         program_name: "save-dweb-backend".to_string(),
         namespace,
         protected_store: veilid_core::VeilidConfigProtectedStore {
@@ -96,7 +96,7 @@ pub fn config_for_dir(base_dir: PathBuf, namespace: String) -> VeilidConfigInner
             ..Default::default()
         },
         ..Default::default()
-    };
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
