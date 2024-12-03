@@ -139,8 +139,11 @@ impl RpcClient {
         // Send the app call and wait for the response
         let response = self.routing_context.app_call(target, payload).await?;
 
+        // TODO: Check message type byte
+        let message_type_byte = response[0];
+        let payload = &response[1..];
         // Parse the response
-        let response: RpcResponse<R> = serde_cbor::from_slice(&response)?;
+        let response: RpcResponse<R> = serde_cbor::from_slice(&payload)?;
 
         // Handle success or error
         match response {
@@ -154,6 +157,10 @@ impl RpcClient {
             } => Err(anyhow!("RPC Error: {}", err)),
             _ => Err(anyhow!("Unexpected response format")),
         }
+    }
+
+    pub async fn get_name(&self) -> Result<String> {
+        self.descriptor.get_name().await
     }
 
     pub async fn join_group(&self, group_url: String) -> Result<JoinGroupResponse> {
@@ -435,6 +442,13 @@ impl RpcService {
             .await?;
 
         Ok(())
+    }
+
+    pub async fn set_name(&self, name: &str) -> Result<()> {
+        self.descriptor.set_name(name).await
+    }
+    pub async fn get_name(&self) -> Result<String> {
+        self.descriptor.get_name().await
     }
 
     pub async fn join_group(&self, request: JoinGroupRequest) -> RpcResponse<JoinGroupResponse> {

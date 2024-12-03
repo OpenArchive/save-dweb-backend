@@ -1337,9 +1337,7 @@ mod tests {
     #[serial]
     async fn test_rpc_service_init() -> Result<()> {
         // Setup temporary directory and initialize the backend
-        let path = TmpDir::new("test_backend_collection_hash_consistency")
-            .await
-            .unwrap();
+        let path = TmpDir::new("test_rpc_service_init").await.unwrap();
         fs::create_dir_all(path.as_ref())
             .await
             .expect("Failed to create base directory");
@@ -1357,9 +1355,7 @@ mod tests {
     #[serial]
     async fn test_rpc_client() -> Result<()> {
         // Setup temporary directory and initialize the backend
-        let path = TmpDir::new("test_backend_collection_hash_consistency")
-            .await
-            .unwrap();
+        let path = TmpDir::new("test_rpc_client").await.unwrap();
         fs::create_dir_all(path.as_ref())
             .await
             .expect("Failed to create base directory");
@@ -1375,11 +1371,23 @@ mod tests {
 
         let rpc_instance = RpcService::from_backend(&backend).await?;
 
+        let rpc_instance_updater = RpcService::from_backend(&backend).await?;
+
+        tokio::spawn(async move {
+            rpc_instance_updater.start_update_listener().await.unwrap();
+        });
+
+        rpc_instance.set_name("Example").await?;
+
         let url = rpc_instance.get_descriptor_url();
 
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         let client = RpcClient::from_veilid(veilid2.clone(), &url).await?;
+
+        let name = client.get_name().await?;
+
+        assert_eq!(name, "Example", "Unable to get name");
 
         let list = client.list_groups().await?;
 
