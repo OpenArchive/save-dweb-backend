@@ -139,24 +139,44 @@ impl RpcClient {
         // Send the app call and wait for the response
         let response = self.routing_context.app_call(target, payload).await?;
 
-        // TODO: Check message type byte
-        let message_type_byte = response[0];
-        let payload = &response[1..];
-        // Parse the response
-        let response: RpcResponse<R> = serde_cbor::from_slice(&payload)?;
-
-        // Handle success or error
-        match response {
-            RpcResponse {
-                success: Some(data),
-                error: None,
-            } => Ok(data),
-            RpcResponse {
-                success: None,
-                error: Some(err),
-            } => Err(anyhow!("RPC Error: {}", err)),
-            _ => Err(anyhow!("Unexpected response format")),
+        // Ensure the response is not empty
+        if response.is_empty() {
+            return Err(anyhow!("Empty response received from RPC call"));
         }
+
+        // Extract the message type byte and payload
+        let response_message_type = response[0];
+        let payload = &response[1..];
+
+        // Check the response message type
+        if response_message_type == MESSAGE_TYPE_ERROR {
+            // Parse and handle an error response
+            let rpc_response: RpcResponse<()> = serde_cbor::from_slice(payload)?;
+            if let Some(err) = rpc_response.error {
+                return Err(anyhow!("RPC Error: {}", err));
+            } else {
+                return Err(anyhow!("Unknown error format in RPC response"));
+            }
+        }
+
+        if response_message_type != message_type {
+            return Err(anyhow!(
+                "Unexpected message type in response. Expected: {}, Got: {}",
+                message_type,
+                response_message_type
+            ));
+        }
+
+        // Parse the response payload into RpcResponse
+        let rpc_response: RpcResponse<R> = serde_cbor::from_slice(payload)?;
+
+        // Handle success responses
+        if let Some(data) = rpc_response.success {
+            return Ok(data);
+        }
+
+        // If neither success nor error is present, the response is invalid
+        Err(anyhow!("RPC Response is missing both success and error fields"))
     }
 
     pub async fn get_name(&self) -> Result<String> {
