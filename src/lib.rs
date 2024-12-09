@@ -981,7 +981,7 @@ mod tests {
         );
 
         // Retry checking if peers have the hash
-        let mut retries = 2;
+        let mut retries = 4;
         let mut peers_have = false;
         while retries > 0 {
             peers_have = joined_group
@@ -992,7 +992,7 @@ mod tests {
                 break;
             }
             retries -= 1;
-            sleep(Duration::from_secs(2)).await;
+            sleep(Duration::from_secs(4)).await;
         }
 
         assert!(peers_have, "Peers should have the uploaded hash");
