@@ -871,7 +871,7 @@ mod tests {
             "New collection hash after uploading a file should not be empty"
         );
 
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(8)).await;
 
         // Download hash from peers
         group2.download_hash_from_peers(&file_hash).await?;
