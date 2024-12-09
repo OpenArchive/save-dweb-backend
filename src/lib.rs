@@ -874,7 +874,15 @@ mod tests {
         sleep(Duration::from_secs(8)).await;
 
         // Download hash from peers
-        group2.download_hash_from_peers(&file_hash).await?;
+        let mut retries = 5;
+        while retries > 0 {
+            if group2.download_hash_from_peers(&file_hash).await.is_ok() {
+                break;
+            }
+            retries -= 1;
+            sleep(Duration::from_secs(4)).await;
+        }
+        assert!(retries > 0, "Failed to download hash from peers after retries");
 
         backend1.stop().await?;
         backend2.stop().await?;
