@@ -1,11 +1,16 @@
 use crate::backend::Backend;
-use crate::common::{CommonKeypair, DHTEntity};
+use crate::common::{init_veilid, CommonKeypair, DHTEntity};
 use crate::constants::{UNABLE_TO_GET_GROUP_NAME, UNABLE_TO_SET_GROUP_NAME};
 use crate::group::Group;
 use crate::repo::Repo;
+use crate::rpc::{JoinGroupRequest, RemoveGroupRequest};
+use crate::rpc::{RpcClient, RpcService};
 use anyhow::{anyhow, Result};
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command, Subcommand};
+use std::sync::Arc;
 use tokio::fs;
+use tokio::sync::Mutex;
+use tracing::error;
 use xdg::BaseDirectories;
 
 mod backend;
@@ -13,32 +18,62 @@ mod common;
 mod constants;
 mod group;
 mod repo;
+mod rpc;
+
+#[derive(Subcommand)]
+enum Commands {
+    Join {
+        #[arg(long)]
+        group_url: String,
+    },
+    Remove {
+        #[arg(long)]
+        group_id: String,
+    },
+    List,
+    Start,
+}
+
+async fn setup_rpc_client(
+    base_dir: &std::path::Path,
+    backend_url: &str,
+) -> anyhow::Result<RpcClient> {
+    let (veilid_api, _update_rx) =
+        init_veilid(base_dir, "save-dweb-backup-client".to_string()).await?;
+    RpcClient::from_veilid(veilid_api, backend_url).await
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let matches = Command::new("Save DWeb Backend")
         .arg(
-            Arg::new("pubkey")
-                .long("pubkey")
-                .value_name("PUBKEY")
-                .help("Sets the public key for the group")
-                .value_parser(clap::value_parser!(String)),
+            Arg::new("backend_url")
+                .long("backend-url")
+                .help("URL of the backend")
+                .required(false)
+                .global(true),
         )
-        .arg(
-            Arg::new("secret")
-                .long("seckey")
-                .value_name("SECKEY")
-                .help("Sets the secret key for the group")
-                .value_parser(clap::value_parser!(String)),
+        .subcommand(
+            Command::new("join").about("Join a group").arg(
+                Arg::new("group_url")
+                    .long("group-url")
+                    .help("URL of the group to join")
+                    .required(true),
+            ),
         )
-        .arg(
-            Arg::new("encryption_key")
-                .long("enckey")
-                .value_name("ENCKEY")
-                .help("Sets the encryption key for the group")
-                .value_parser(clap::value_parser!(String)),
+        .subcommand(
+            Command::new("remove").about("Remove a group").arg(
+                Arg::new("group_id")
+                    .long("group-id")
+                    .help("ID of the group to remove")
+                    .required(true),
+            ),
         )
+        .subcommand(Command::new("list").about("List known groups"))
+        .subcommand(Command::new("start").about("Start the RPC service and log the URL"))
         .get_matches();
+
+    let backend_url = matches.get_one::<String>("backend_url");
 
     let xdg_dirs = BaseDirectories::with_prefix("save-dweb-backend")?;
     let base_dir = xdg_dirs.get_data_home();
@@ -49,35 +84,62 @@ async fn main() -> anyhow::Result<()> {
 
     let mut backend = Backend::new(&base_dir)?;
 
-    backend.start().await?;
+    match matches.subcommand() {
+        Some(("join", sub_matches)) => {
+            let backend_url = matches.get_one::<String>("backend_url").ok_or_else(|| {
+                anyhow!("Error: --backend-url is required for the 'join' command")
+            })?;
 
-    // Check if keys were provided, otherwise create a new group
-    if matches.contains_id("pubkey")
-        && matches.contains_id("seckey")
-        && matches.contains_id("enckey")
-    {
-        let pubkey = matches.get_one::<String>("pubkey").unwrap();
-        let seckey = matches.get_one::<String>("seckey").unwrap();
-        let enckey = matches.get_one::<String>("enckey").unwrap();
-        println!("Provided Public Key: {:?}", pubkey);
-        println!("Provided Secret Key: {:?}", seckey);
-        println!("Provided Encryption Key: {:?}", enckey);
-    } else {
-        let group = backend.create_group().await?;
-        println!("Group created with Record Key: {:?}", group.id());
-        println!(
-            "Group created with Secret Key: {:?}",
-            group.get_secret_key().unwrap()
-        );
-        println!(
-            "Group created with Encryption Key: {:?}",
-            group.get_encryption_key()
-        );
+            let group_url = sub_matches.get_one::<String>("group_url").unwrap();
+            println!("Joining group: {}", group_url);
+
+            let rpc_client = setup_rpc_client(&base_dir, backend_url).await?;
+
+            rpc_client.join_group(group_url.to_string()).await?;
+            println!("Successfully joined group.");
+        }
+        Some(("list", _)) => {
+            let backend_url = matches.get_one::<String>("backend_url").ok_or_else(|| {
+                anyhow!("Error: --backend-url is required for the 'list' command")
+            })?;
+
+            println!("Listing all groups...");
+
+            let rpc_client = setup_rpc_client(&base_dir, backend_url).await?;
+
+            let response = rpc_client.list_groups().await?;
+            for group_id in response.group_ids {
+                println!("Group ID: {}", group_id);
+            }
+        }
+        Some(("remove", sub_matches)) => {
+            let backend_url = matches.get_one::<String>("backend_url").ok_or_else(|| {
+                anyhow!("Error: --backend-url is required for the 'remove' command")
+            })?;
+
+            let group_id = sub_matches.get_one::<String>("group_id").unwrap();
+            println!("Removing group: {}", group_id);
+
+            let rpc_client = setup_rpc_client(&base_dir, backend_url).await?;
+
+            rpc_client.remove_group(group_id.to_string()).await?;
+            println!("Successfully removed group.");
+        }
+        Some(("start", _)) => {
+            backend.start().await?;
+            let rpc_service = RpcService::from_backend(&backend).await?;
+            println!(
+                "RPC service started at URL: {}",
+                rpc_service.get_descriptor_url()
+            );
+            rpc_service.start_update_listener().await?;
+        }
+        _ => {
+            // Otherwise, start the normal backend and group operations
+            backend.start().await?;
+            tokio::signal::ctrl_c().await?;
+            backend.stop().await?;
+        }
     }
-    // Await for ctrl-c and then stop the backend
-    tokio::signal::ctrl_c().await?;
-
-    backend.stop().await?;
-
     Ok(())
 }

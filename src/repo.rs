@@ -196,7 +196,7 @@ impl Repo {
         if let Ok(collection_hash) = self.iroh_blobs.collection_hash(&collection_name).await {
             // Collection exists, return the hash
             println!("Collection hash found in store: {:?}", collection_hash);
-            return Ok(collection_hash);
+            Ok(collection_hash)
         } else {
             // Create a new collection
             println!("Creating new collection...");
@@ -218,7 +218,7 @@ impl Repo {
             }
 
             // Return the new collection hash
-            return Ok(new_hash);
+            Ok(new_hash)
         }
     }
 

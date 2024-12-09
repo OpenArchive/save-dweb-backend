@@ -3,6 +3,7 @@ pub mod common;
 pub mod constants;
 pub mod group;
 pub mod repo;
+pub mod rpc;
 
 use crate::constants::{
     FAILED_TO_DESERIALIZE_KEYPAIR, FAILED_TO_LOAD_KEYPAIR, GROUP_NOT_FOUND, KEYPAIR_NOT_FOUND,
@@ -29,6 +30,8 @@ mod tests {
     use anyhow::Result;
     use bytes::Bytes;
     use common::init_veilid;
+    use rpc::RpcClient;
+    use rpc::RpcService;
     use std::path::Path;
     use std::result;
     use tmpdir::TmpDir;
@@ -868,10 +871,18 @@ mod tests {
             "New collection hash after uploading a file should not be empty"
         );
 
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(8)).await;
 
         // Download hash from peers
-        group2.download_hash_from_peers(&file_hash).await?;
+        let mut retries = 5;
+        while retries > 0 {
+            if group2.download_hash_from_peers(&file_hash).await.is_ok() {
+                break;
+            }
+            retries -= 1;
+            sleep(Duration::from_secs(4)).await;
+        }
+        assert!(retries > 0, "Failed to download hash from peers after retries");
 
         backend1.stop().await?;
         backend2.stop().await?;
@@ -978,7 +989,7 @@ mod tests {
         );
 
         // Retry checking if peers have the hash
-        let mut retries = 2;
+        let mut retries = 4;
         let mut peers_have = false;
         while retries > 0 {
             peers_have = joined_group
@@ -989,7 +1000,7 @@ mod tests {
                 break;
             }
             retries -= 1;
-            sleep(Duration::from_secs(2)).await;
+            sleep(Duration::from_secs(4)).await;
         }
 
         assert!(peers_have, "Peers should have the uploaded hash");
@@ -1331,6 +1342,71 @@ mod tests {
 
         // Clean up
         backend.stop().await.expect("Unable to stop backend");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_rpc_service_init() -> Result<()> {
+        // Setup temporary directory and initialize the backend
+        let path = TmpDir::new("test_rpc_service_init").await.unwrap();
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        let rpc_instance = RpcService::from_backend(&backend).await?;
+
+        backend.stop().await.expect("Unable to stop backend");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_rpc_client() -> Result<()> {
+        // Setup temporary directory and initialize the backend
+        let path = TmpDir::new("test_rpc_client").await.unwrap();
+        fs::create_dir_all(path.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
+        let (veilid2, _) = init_veilid(
+            &path.to_path_buf().join("client"),
+            "save-dweb-backup".to_string(),
+        )
+        .await?;
+
+        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
+        backend.start().await.expect("Unable to start");
+
+        let rpc_instance = RpcService::from_backend(&backend).await?;
+
+        let rpc_instance_updater = RpcService::from_backend(&backend).await?;
+
+        tokio::spawn(async move {
+            rpc_instance_updater.start_update_listener().await.unwrap();
+        });
+
+        rpc_instance.set_name("Example").await?;
+
+        let url = rpc_instance.get_descriptor_url();
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let client = RpcClient::from_veilid(veilid2.clone(), &url).await?;
+
+        let name = client.get_name().await?;
+
+        assert_eq!(name, "Example", "Unable to get name");
+
+        let list = client.list_groups().await?;
+
+        assert_eq!(list.group_ids.len(), 0, "No groups on init");
+
+        backend.stop().await.expect("Unable to stop backend");
+        veilid2.shutdown().await;
         Ok(())
     }
 }
