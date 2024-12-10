@@ -44,6 +44,7 @@ pub struct BackendInner {
     update_rx: Option<broadcast::Receiver<VeilidUpdate>>,
     groups: HashMap<CryptoKey, Box<Group>>,
     pub iroh_blobs: Option<VeilidIrohBlobs>,
+    on_new_route_callback: Option<OnNewRouteCallback>,
 }
 
 impl BackendInner {
@@ -85,6 +86,7 @@ impl BackendInner {
     }
 }
 
+#[derive(Clone)]
 pub struct Backend {
     inner: Arc<Mutex<BackendInner>>,
 }
@@ -97,6 +99,7 @@ impl Backend {
             update_rx: None,
             groups: HashMap::new(),
             iroh_blobs: None,
+            on_new_route_callback: None,
         };
 
         let backend = Backend {
@@ -118,6 +121,7 @@ impl Backend {
             update_rx: Some(update_rx),
             groups: HashMap::new(),
             iroh_blobs: None,
+            on_new_route_callback: None,
         };
 
         let backend = Backend {
@@ -126,11 +130,15 @@ impl Backend {
 
         let inner_clone = backend.inner.clone();
 
-        let on_new_route_callback: OnNewRouteCallback = Arc::new(move |_, _| {
+        let on_new_route_callback: OnNewRouteCallback = Arc::new(move |route_id, route_id_blob| {
             let inner = inner_clone.clone();
             println!("Re-generating route");
             tokio::spawn(async move {
                 let inner = inner.lock().await;
+
+                if let Some(on_new_route) = &inner.on_new_route_callback {
+                    on_new_route(route_id, route_id_blob)
+                }
 
                 for group in inner.groups.clone().into_values() {
                     if let Some(repo) = group.get_own_repo().await {
@@ -204,11 +212,15 @@ impl Backend {
 
         let inner_clone = self.inner.clone();
 
-        let on_new_route_callback: OnNewRouteCallback = Arc::new(move |_, _| {
+        let on_new_route_callback: OnNewRouteCallback = Arc::new(move |route_id, route_id_blob| {
             let inner = inner_clone.clone();
             println!("Re-generating route");
             tokio::spawn(async move {
                 let inner = inner.lock().await;
+
+                if let Some(on_new_route) = &inner.on_new_route_callback {
+                    on_new_route(route_id, route_id_blob)
+                }
 
                 for group in inner.groups.clone().into_values() {
                     if let Some(repo) = group.get_own_repo().await {
@@ -264,9 +276,25 @@ impl Backend {
         Ok(())
     }
 
+    pub async fn set_on_new_route_callback(
+        &self,
+        on_new_route_connected_callback: OnNewRouteCallback,
+    ) {
+        let mut inner = self.inner.lock().await;
+        inner.on_new_route_callback = Some(on_new_route_connected_callback);
+    }
+
     pub async fn join_from_url(&self, url_string: &str) -> Result<Box<Group>> {
         let keys = parse_url(url_string)?;
         self.join_group(keys).await
+    }
+
+    pub async fn get_route_id_blob(&self) -> Result<Vec<u8>> {
+        if let Some(blobs) = self.get_iroh_blobs().await {
+            Ok(blobs.route_id_blob().await)
+        } else {
+            Err(anyhow!("Veilid not initialized"))
+        }
     }
 
     pub async fn join_group(&self, keys: CommonKeypair) -> Result<Box<Group>> {
@@ -487,6 +515,11 @@ impl Backend {
         let mut inner = self.inner.lock().await;
         inner.iroh_blobs.clone()
     }
+
+    pub async fn get_routing_context(&self) -> Option<RoutingContext> {
+        let veilid_api = self.get_veilid_api().await?;
+        veilid_api.routing_context().ok()
+    }
 }
 
 async fn wait_for_network(update_rx: &mut broadcast::Receiver<VeilidUpdate>) -> Result<()> {
@@ -511,7 +544,7 @@ fn find_query(url: &Url, key: &str) -> Result<String> {
     Err(anyhow!("Unable to find parameter {} in URL {:?}", key, url))
 }
 
-fn crypto_key_from_query(url: &Url, key: &str) -> Result<CryptoKey> {
+pub fn crypto_key_from_query(url: &Url, key: &str) -> Result<CryptoKey> {
     let value = find_query(url, key)?;
     let bytes = hex::decode(value)?;
     let mut key_vec: [u8; CRYPTO_KEY_LENGTH] = [0; CRYPTO_KEY_LENGTH];

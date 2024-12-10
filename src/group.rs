@@ -11,6 +11,9 @@ use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
+use std::future::Future;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use std::path::PathBuf;
 use std::result;
 use std::sync::Arc;
@@ -18,7 +21,7 @@ use tokio::sync::{mpsc, Mutex};
 use url::Url;
 use veilid_core::{
     CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, DHTReportScope, DHTSchema,
-    KeyPair, ProtectedStore, RoutingContext, SharedSecret, TypedKey, ValueSubkeyRangeSet,
+    KeyPair, ProtectedStore, RoutingContext, SharedSecret, TypedKey, ValueSubkeyRangeSet, VeilidUpdate,
     VeilidAPI, CRYPTO_KEY_LENGTH, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
@@ -80,8 +83,7 @@ impl Group {
             .lock()
             .await
             .get(id)
-            .ok_or_else(|| anyhow!("Repo not loaded"))
-            .map(|repo| repo.clone())
+            .ok_or_else(|| anyhow!("Repo not loaded")).cloned()
     }
 
     pub async fn has_repo(&self, id: &CryptoKey) -> bool {
@@ -122,7 +124,7 @@ impl Group {
         let mut repos = self.list_peer_repos().await;
         repos.shuffle(&mut rng);
 
-        if repos.len() == 0 {
+        if repos.is_empty() {
             return Err(anyhow!("Cannot download hash. No other peers found"));
         }
 
@@ -310,6 +312,15 @@ impl Group {
 
         let mut repo_id_buffer: [u8; CRYPTO_KEY_LENGTH] = [0; CRYPTO_KEY_LENGTH];
 
+        // Validate the length before copying
+        if repo_id_raw.data().len() != repo_id_buffer.len() {
+            return Err(anyhow!(
+                "Slice length mismatch: expected {}, got {}",
+                repo_id_buffer.len(),
+                repo_id_raw.data().len()
+            ));
+        }
+
         repo_id_buffer.copy_from_slice(repo_id_raw.data());
 
         let repo_id = TypedKey::new(CRYPTO_KIND_VLD0, CryptoKey::from(repo_id_buffer));
@@ -338,9 +349,9 @@ impl Group {
     pub async fn try_load_repo_from_disk(&mut self) -> bool {
         if let Err(err) = self.load_repo_from_disk().await {
             eprintln!("Unable to load own repo from disk {}", err);
-            return false;
+            false
         } else {
-            return true;
+            true
         }
     }
 
@@ -429,7 +440,7 @@ impl Group {
         let keypair = CommonKeypair {
             id: repo.id(),
             public_key: repo_dht_record.owner().clone(),
-            secret_key: repo_dht_record.owner_secret().map(|key| *key),
+            secret_key: repo_dht_record.owner_secret().copied(),
             encryption_key: encryption_key.clone(),
         };
 
@@ -463,6 +474,59 @@ impl Group {
             .await
             .map_err(|_| anyhow!("Failed to load keypair for repo_id: {:?}", repo_id))
     }
+    
+    pub async fn watch_changes<F, Fut>(&self, on_change: F) -> Result<()>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let repo_count = self.dht_repo_count().await?;
+        let range = if repo_count > 0 {
+            ValueSubkeyRangeSet::single_range(0, repo_count as u32 - 1)
+        } else {
+            ValueSubkeyRangeSet::full()
+        };
+        
+        let expiration_duration = 600_000_000;
+        let expiration = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_micros() as u64 + expiration_duration;
+        let count = 0;
+
+        // Clone necessary data for the async block
+        let routing_context = self.routing_context.clone();
+        let dht_record_key = self.dht_record.key().clone();
+
+        // Spawn a task that uses only owned data
+        tokio::spawn(async move {
+            match routing_context
+                .watch_dht_values(dht_record_key.clone(), range.clone(), expiration.into(), count)
+                .await
+            {
+                Ok(_) => {
+                    println!("DHT watch successfully set on record key {:?}", dht_record_key);
+
+                    loop {
+                        if let Ok(change) = routing_context
+                            .watch_dht_values(dht_record_key.clone(), range.clone(), expiration.into(), count)
+                            .await
+                        {
+                            if change > 0.into() {
+                                if let Err(e) = on_change().await {
+                                    eprintln!("Failed to re-download files: {:?}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => eprintln!("Failed to set DHT watch: {:?}", e),
+            }
+        });
+
+        Ok(())
+    }
+    
+
 }
 
 impl DHTEntity for Group {
