@@ -832,9 +832,11 @@ mod tests {
             .await
             .expect("Unable to create group");
 
+        group.set_name("Example").await?;
+
         let mut peer_repo = group.create_repo().await?;
 
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(2)).await;
 
         let group2 = backend2.join_from_url(&group.get_url()).await?;
 
@@ -871,7 +873,7 @@ mod tests {
             "New collection hash after uploading a file should not be empty"
         );
 
-        sleep(Duration::from_secs(8)).await;
+        sleep(Duration::from_secs(2)).await;
 
         // Download hash from peers
         let mut retries = 5;
@@ -882,7 +884,10 @@ mod tests {
             retries -= 1;
             sleep(Duration::from_secs(4)).await;
         }
-        assert!(retries > 0, "Failed to download hash from peers after retries");
+        assert!(
+            retries > 0,
+            "Failed to download hash from peers after retries"
+        );
 
         backend1.stop().await?;
         backend2.stop().await?;

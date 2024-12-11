@@ -160,9 +160,7 @@ impl Backend {
         });
 
         let (route_id, route_id_blob) = make_route(&veilid_api).await?;
-        let routing_context = veilid_api
-            .routing_context()?
-            .with_sequencing(veilid_core::Sequencing::EnsureOrdered);
+        let routing_context = veilid_api.routing_context()?;
 
         let mut inner = backend.inner.lock().await;
 
@@ -206,9 +204,7 @@ impl Backend {
         let (route_id, route_id_blob) = make_route(&veilid_api).await?;
 
         // Get veilid_api and routing_context
-        let routing_context = veilid_api
-            .routing_context()?
-            .with_sequencing(veilid_core::Sequencing::EnsureOrdered);
+        let routing_context = veilid_api.routing_context()?;
 
         let inner_clone = self.inner.clone();
 

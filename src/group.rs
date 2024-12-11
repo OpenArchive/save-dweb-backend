@@ -21,8 +21,8 @@ use tokio::sync::{mpsc, Mutex};
 use url::Url;
 use veilid_core::{
     CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, DHTReportScope, DHTSchema,
-    KeyPair, ProtectedStore, RoutingContext, SharedSecret, TypedKey, ValueSubkeyRangeSet, VeilidUpdate,
-    VeilidAPI, CRYPTO_KEY_LENGTH, CRYPTO_KIND_VLD0,
+    KeyPair, ProtectedStore, RoutingContext, SharedSecret, TypedKey, ValueSubkeyRangeSet,
+    VeilidAPI, VeilidUpdate, CRYPTO_KEY_LENGTH, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 
@@ -83,7 +83,8 @@ impl Group {
             .lock()
             .await
             .get(id)
-            .ok_or_else(|| anyhow!("Repo not loaded")).cloned()
+            .ok_or_else(|| anyhow!("Repo not loaded"))
+            .cloned()
     }
 
     pub async fn has_repo(&self, id: &CryptoKey) -> bool {
@@ -130,12 +131,6 @@ impl Group {
 
         for repo in repos.iter() {
             if let Ok(route_id_blob) = repo.get_route_id_blob().await {
-                println!(
-                    "Downloading {} from {} via {:?}",
-                    hash,
-                    repo.id(),
-                    route_id_blob
-                );
                 // It's faster to try and fail, than to ask then try
                 let result = self
                     .iroh_blobs
@@ -474,7 +469,7 @@ impl Group {
             .await
             .map_err(|_| anyhow!("Failed to load keypair for repo_id: {:?}", repo_id))
     }
-    
+
     pub async fn watch_changes<F, Fut>(&self, on_change: F) -> Result<()>
     where
         F: Fn() -> Fut + Send + Sync + 'static,
@@ -486,11 +481,10 @@ impl Group {
         } else {
             ValueSubkeyRangeSet::full()
         };
-        
+
         let expiration_duration = 600_000_000;
-        let expiration = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_micros() as u64 + expiration_duration;
+        let expiration =
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros() as u64 + expiration_duration;
         let count = 0;
 
         // Clone necessary data for the async block
@@ -500,15 +494,28 @@ impl Group {
         // Spawn a task that uses only owned data
         tokio::spawn(async move {
             match routing_context
-                .watch_dht_values(dht_record_key.clone(), range.clone(), expiration.into(), count)
+                .watch_dht_values(
+                    dht_record_key.clone(),
+                    range.clone(),
+                    expiration.into(),
+                    count,
+                )
                 .await
             {
                 Ok(_) => {
-                    println!("DHT watch successfully set on record key {:?}", dht_record_key);
+                    println!(
+                        "DHT watch successfully set on record key {:?}",
+                        dht_record_key
+                    );
 
                     loop {
                         if let Ok(change) = routing_context
-                            .watch_dht_values(dht_record_key.clone(), range.clone(), expiration.into(), count)
+                            .watch_dht_values(
+                                dht_record_key.clone(),
+                                range.clone(),
+                                expiration.into(),
+                                count,
+                            )
                             .await
                         {
                             if change > 0.into() {
@@ -525,8 +532,6 @@ impl Group {
 
         Ok(())
     }
-    
-
 }
 
 impl DHTEntity for Group {
