@@ -336,7 +336,9 @@ impl Group {
         let mut i = 1;
         while i <= count {
             println!("Loading from DHT {}", i);
-            self.load_repo_from_dht(i.try_into()?).await?;
+            if let Err(e) = self.load_repo_from_dht(i.try_into()?).await {
+                eprintln!("Warning: Failed to load repo {} from DHT: {:?}", i, e);
+            }
             i += 1;
         }
 
