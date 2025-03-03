@@ -289,19 +289,17 @@ Command bytes for operations:
 
 The replication process:
 
-
-
-    * Check if we have data locally and return if it exists.
-    * Downloading starts by sending an ASK request and waiting for a HAS response.
-    * After the HAS response the peer will send a series of messages starting with DATA followed by a chunk of the raw data.
-    * Once all the data has been sent the peer sends a DONE message and stops replicating the Tunnel.
-    * This data stream is ingested into the local Iroh store.
-    * Once the data stream is finished we verify the final hash from Iroh.
-    * If it does not match the data is thrown out and replication is started with another peer.
-    * When replication we first ask for a Repo’s collection hash in order to get the hashes for their file list.
-    * Afterwards we may initiate downloads for individual files by first looking up their hash in the collection.
-    * Replication connects to peers in the group in random order until one has the data, thus ensuring we don’t need a specific peer to be online as long as somebody has a copy.
-    * Implements failure handling with peer fallback \
+* Check if we have data locally and return if it exists.
+* Downloading starts by sending an ASK request and waiting for a HAS response.
+* After the HAS response the peer will send a series of messages starting with DATA followed by a chunk of the raw data.
+* Once all the data has been sent the peer sends a DONE message and stops replicating the Tunnel.
+* This data stream is ingested into the local Iroh store.
+* Once the data stream is finished we verify the final hash from Iroh.
+* If it does not match the data is thrown out and replication is started with another peer.
+* When replication we first ask for a Repo’s collection hash in order to get the hashes for their file list.
+* Afterwards we may initiate downloads for individual files by first looking up their hash in the collection.
+* Replication connects to peers in the group in random order until one has the data, thus ensuring we don’t need a specific peer to be online as long as somebody has a copy.
+* Implements failure handling with peer fallback \
 ([Source](https://github.com/rangermauve/veilid-iroh-blobs/blob/default/src/iroh.rs#L450-L550))
 
 
@@ -394,10 +392,10 @@ The Save DWeb Backend is built using the Rust programming language, leveraging i
 
 
 
-* Run tests with` cargo test`
+* Run tests with `cargo test`
 * Format code with `cargo fmt`
-* Lint with` cargo clippy`
-* Run the backend with` cargo run`
+* Lint with `cargo clippy`
+* Run the backend with `cargo run`
 
 	[Source](https://github.com/openarchive/save-dweb-backend/blob/main/README.md#running)
 
