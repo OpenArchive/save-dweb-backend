@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 pub mod backend;
 pub mod common;
 pub mod constants;
@@ -158,10 +159,10 @@ mod tests {
 
         let mut loaded_group = backend.get_group(&group.id()).await.expect(GROUP_NOT_FOUND);
 
-        let protected_store = backend.get_protected_store().await.unwrap();
+        let veilid = backend.get_veilid_api().await.unwrap();
+        let protected_store = veilid.protected_store().unwrap();
         let keypair_data = protected_store
             .load_user_secret(group.id().to_string())
-            .await
             .expect(FAILED_TO_LOAD_KEYPAIR)
             .expect(KEYPAIR_NOT_FOUND);
 
@@ -639,7 +640,12 @@ mod tests {
             .await
             .expect("Failed to write to temp file");
 
-        let protected_store = backend.get_protected_store().await.unwrap();
+        let protected_store = backend
+            .get_veilid_api()
+            .await
+            .unwrap()
+            .protected_store()
+            .unwrap();
 
         let repo = group.create_repo().await?;
 
@@ -879,6 +885,7 @@ mod tests {
         let mut retries = 5;
         while retries > 0 {
             if group2.download_hash_from_peers(&file_hash).await.is_ok() {
+                println!("Download success!");
                 break;
             }
             retries -= 1;

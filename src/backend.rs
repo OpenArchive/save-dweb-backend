@@ -12,6 +12,7 @@ use iroh_blobs::Hash;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::mem;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
@@ -56,9 +57,9 @@ impl BackendInner {
         println!("Saving group IDs {:?}", info);
         let data =
             serde_cbor::to_vec(&info).map_err(|e| anyhow!("Failed to serialize keypair: {}", e))?;
-        self.get_protected_store()?
+        self.veilid()?
+            .protected_store()?
             .save_user_secret(KNOWN_GROUP_LIST, &data)
-            .await
             .map_err(|e| anyhow!("Unable to store known group IDs: {}", e))?;
         Ok(())
     }
@@ -77,12 +78,6 @@ impl BackendInner {
             .as_ref()
             .ok_or_else(|| anyhow!("Veilid Iroh Blobs API not initialized"))?
             .clone())
-    }
-
-    fn get_protected_store(&self) -> Result<ProtectedStore> {
-        let veilid_api = self.veilid()?;
-        let store = veilid_api.protected_store()?;
-        Ok(store)
     }
 }
 
@@ -300,7 +295,10 @@ impl Backend {
         let veilid = inner.veilid()?;
 
         let routing_context = veilid.routing_context()?;
-        let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
+        let crypto_system = veilid
+            .crypto()?
+            .get(CRYPTO_KIND_VLD0)
+            .ok_or_else(|| anyhow!("Unable to init crypto system"));
 
         let record_key = TypedKey::new(CRYPTO_KIND_VLD0, keys.id);
         // First open the DHT record
@@ -346,12 +344,18 @@ impl Backend {
         let veilid = inner.veilid()?;
 
         let routing_context = veilid.routing_context()?;
+        let crypto = veilid.crypto()?;
+        let crypto_system = crypto
+            .get(CRYPTO_KIND_VLD0)
+            .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
+
         let schema = DHTSchema::dflt(65)?; // 64 members + a title
         let kind = Some(CRYPTO_KIND_VLD0);
+        let owner_keypair = crypto_system.generate_keypair();
 
-        let dht_record = routing_context.create_dht_record(schema, kind).await?;
-        let keypair = vld0_generate_keypair();
-        let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
+        let dht_record = routing_context
+            .create_dht_record(schema, Some(owner_keypair), kind)
+            .await?;
 
         let encryption_key = crypto_system.random_shared_secret();
 
@@ -397,7 +401,10 @@ impl Backend {
             .await
             .map_err(|_| anyhow!("Failed to load keypair"))?;
 
-        let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
+        let crypto = veilid.crypto()?;
+        let crypto_system = crypto
+            .get(CRYPTO_KIND_VLD0)
+            .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
 
         // Use the owner key from the DHT record as the default writer
         let owner_key = retrieved_keypair.public_key; // Call the owner() method to get the owner key
@@ -442,11 +449,11 @@ impl Backend {
     }
 
     pub async fn list_known_group_ids(&self) -> Result<Vec<CryptoKey>> {
-        let data = self
-            .get_protected_store()
-            .await?
+        let mut inner = self.inner.lock().await;
+        let veilid = inner.veilid()?;
+        let data = veilid
+            .protected_store()?
             .load_user_secret(KNOWN_GROUP_LIST)
-            .await
             .map_err(|_| anyhow!("Failed to load keypair"))?
             .ok_or_else(|| anyhow!("Keypair not found"))?;
         let info: KnownGroupList =
@@ -462,13 +469,6 @@ impl Backend {
             return Err(anyhow!("Group not found"));
         }
         Ok(())
-    }
-
-    pub async fn get_protected_store(&self) -> Result<Arc<ProtectedStore>> {
-        let mut inner = self.inner.lock().await;
-        inner
-            .veilid()
-            .map(|api| Arc::new(api.protected_store().unwrap()))
     }
 
     pub async fn create_collection(&self) -> Result<Hash> {

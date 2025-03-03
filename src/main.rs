@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 use crate::backend::Backend;
 use crate::common::{init_veilid, CommonKeypair, DHTEntity};
 use crate::constants::{UNABLE_TO_GET_GROUP_NAME, UNABLE_TO_SET_GROUP_NAME};

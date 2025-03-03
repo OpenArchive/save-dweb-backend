@@ -107,10 +107,13 @@ pub fn parse_url_for_rpc(url_string: &str) -> Result<RpcKeys> {
 impl RpcClient {
     pub async fn from_veilid(veilid: VeilidAPI, url: &str) -> Result<Self> {
         let routing_context = veilid.routing_context()?;
-        let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
+        let crypto_system = veilid
+            .crypto()?
+            .get(CRYPTO_KIND_VLD0)
+            .ok_or_else(|| anyhow!("Unable to init crypto system"));
 
         let descriptor =
-            RpcServiceDescriptor::from_url(routing_context.clone(), crypto_system, url).await?;
+            RpcServiceDescriptor::from_url(routing_context.clone(), veilid.clone(), url).await?;
 
         Ok(RpcClient {
             veilid,
@@ -176,7 +179,9 @@ impl RpcClient {
         }
 
         // If neither success nor error is present, the response is invalid
-        Err(anyhow!("RPC Response is missing both success and error fields"))
+        Err(anyhow!(
+            "RPC Response is missing both success and error fields"
+        ))
     }
 
     pub async fn get_name(&self) -> Result<String> {
@@ -212,14 +217,14 @@ pub struct RpcKeys {
 pub struct RpcServiceDescriptor {
     keypair: RpcKeys,
     routing_context: RoutingContext,
-    crypto_system: CryptoSystemVLD0,
+    veilid: VeilidAPI,
     dht_record: DHTRecordDescriptor,
 }
 
 impl RpcServiceDescriptor {
     pub async fn from_url(
         routing_context: RoutingContext,
-        crypto_system: CryptoSystemVLD0,
+        veilid: VeilidAPI,
         url: &str,
     ) -> Result<Self> {
         let keys = parse_url_for_rpc(url)?;
@@ -236,7 +241,7 @@ impl RpcServiceDescriptor {
         Ok(RpcServiceDescriptor {
             keypair: keys,
             routing_context,
-            crypto_system,
+            veilid,
             dht_record,
         })
     }
@@ -296,9 +301,13 @@ impl RpcService {
         let kind = Some(CRYPTO_KIND_VLD0);
 
         // TODO: try loading from protected store before creating
-        let dht_record = routing_context.create_dht_record(schema, kind).await?;
-        let owner_keypair = vld0_generate_keypair();
-        let crypto_system = CryptoSystemVLD0::new(veilid.crypto()?);
+        let dht_record = routing_context
+            .create_dht_record(schema, None, kind)
+            .await?;
+        let crypto = veilid.crypto()?;
+        let crypto_system = crypto
+            .get(CRYPTO_KIND_VLD0)
+            .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
 
         let encryption_key = crypto_system.random_shared_secret();
 
@@ -310,7 +319,7 @@ impl RpcService {
         let descriptor = RpcServiceDescriptor {
             keypair,
             routing_context,
-            crypto_system,
+            veilid: veilid.clone(),
             dht_record,
         };
 
@@ -694,7 +703,7 @@ impl DHTEntity for RpcServiceDescriptor {
         self.routing_context.clone()
     }
 
-    fn get_crypto_system(&self) -> CryptoSystemVLD0 {
-        self.crypto_system.clone()
+    fn get_veilid_api(&self) -> VeilidAPI {
+        self.veilid.clone()
     }
 }

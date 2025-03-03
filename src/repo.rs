@@ -28,7 +28,7 @@ pub struct Repo {
     pub encryption_key: SharedSecret,
     pub secret_key: Option<CryptoTyped<CryptoKey>>,
     pub routing_context: RoutingContext,
-    pub crypto_system: CryptoSystemVLD0,
+    pub veilid: VeilidAPI,
     pub iroh_blobs: VeilidIrohBlobs,
 }
 
@@ -38,7 +38,7 @@ impl Repo {
         encryption_key: SharedSecret,
         secret_key: Option<CryptoTyped<CryptoKey>>,
         routing_context: RoutingContext,
-        crypto_system: CryptoSystemVLD0,
+        veilid: VeilidAPI,
         iroh_blobs: VeilidIrohBlobs,
     ) -> Self {
         Self {
@@ -46,7 +46,7 @@ impl Repo {
             encryption_key,
             secret_key,
             routing_context,
-            crypto_system,
+            veilid,
             iroh_blobs,
         }
     }
@@ -377,8 +377,8 @@ impl DHTEntity for Repo {
         self.routing_context.clone()
     }
 
-    fn get_crypto_system(&self) -> CryptoSystemVLD0 {
-        self.crypto_system.clone()
+    fn get_veilid_api(&self) -> VeilidAPI {
+        self.veilid.clone()
     }
 
     fn get_dht_record(&self) -> DHTRecordDescriptor {

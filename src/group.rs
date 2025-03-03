@@ -279,6 +279,8 @@ impl Group {
         //         ))
         let keypair = None;
 
+        let veilid = self.get_veilid_api();
+
         let dht_record = self
             .routing_context
             .open_dht_record(repo_id.clone(), keypair)
@@ -289,7 +291,7 @@ impl Group {
             encryption_key: self.encryption_key.clone(),
             secret_key: None,
             routing_context: self.routing_context.clone(),
-            crypto_system: self.get_crypto_system(),
+            veilid: veilid.clone(),
             iroh_blobs: self.iroh_blobs.clone(),
         };
 
@@ -358,7 +360,6 @@ impl Group {
 
         let key_bytes = protected_store
             .load_user_secret(group_repo_key)
-            .await
             .map_err(|err| anyhow!("Unable to load repo from disk"))?
             .ok_or_else(|| anyhow!("No repo exists on disk for this group"))?;
 
@@ -383,14 +384,14 @@ impl Group {
             .secret_key
             .map(|key| TypedKey::new(CRYPTO_KIND_VLD0, key));
 
-        let repo = Repo {
+        let repo = Repo::new(
             dht_record,
-            encryption_key: self.encryption_key.clone(),
+            self.encryption_key.clone(),
             secret_key,
-            routing_context: self.routing_context.clone(),
-            crypto_system: self.get_crypto_system(),
-            iroh_blobs: self.iroh_blobs.clone(),
-        };
+            self.routing_context.clone(),
+            self.veilid.clone(),
+            self.iroh_blobs.clone(),
+        );
         repo.update_route_on_dht().await?;
 
         self.add_repo(repo.clone()).await?;
@@ -406,7 +407,10 @@ impl Group {
         // Create a new DHT record for the repo
         let schema = DHTSchema::dflt(3)?;
         let kind = Some(CRYPTO_KIND_VLD0);
-        let repo_dht_record = self.routing_context.create_dht_record(schema, kind).await?;
+        let repo_dht_record = self
+            .routing_context
+            .create_dht_record(schema, None, kind)
+            .await?;
 
         // Identify the repo with the DHT record's key
         let repo_id = repo_dht_record.key().clone();
@@ -423,7 +427,7 @@ impl Group {
             encryption_key,
             Some(secret_key_typed),
             self.routing_context.clone(),
-            self.get_crypto_system(),
+            self.veilid.clone(),
             self.iroh_blobs.clone(),
         );
 
@@ -449,7 +453,6 @@ impl Group {
         let key_bytes = *repo.id();
         protected_store
             .save_user_secret(group_repo_key, key_bytes.as_slice())
-            .await
             .map_err(|e| anyhow!("Unable to store repo id for group: {}", e))?;
 
         self.add_repo(repo).await?;
@@ -547,9 +550,8 @@ impl DHTEntity for Group {
         self.routing_context.clone()
     }
 
-    fn get_crypto_system(&self) -> CryptoSystemVLD0 {
-        // TODO handle the error?
-        CryptoSystemVLD0::new(self.veilid.crypto().unwrap())
+    fn get_veilid_api(&self) -> VeilidAPI {
+        self.veilid.clone()
     }
 
     fn get_dht_record(&self) -> DHTRecordDescriptor {

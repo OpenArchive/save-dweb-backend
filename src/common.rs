@@ -113,7 +113,6 @@ impl CommonKeypair {
             serde_cbor::to_vec(&self).map_err(|e| anyhow!("Failed to serialize keypair: {}", e))?;
         protected_store
             .save_user_secret(self.id.to_string(), &keypair_data)
-            .await
             .map_err(|e| anyhow!("Unable to store keypair: {}", e))?;
         Ok(())
     }
@@ -121,7 +120,6 @@ impl CommonKeypair {
     pub async fn load_keypair(protected_store: &ProtectedStore, id: &CryptoKey) -> Result<Self> {
         let keypair_data = protected_store
             .load_user_secret(id.to_string())
-            .await
             .map_err(|_| anyhow!("Failed to load keypair"))?
             .ok_or_else(|| anyhow!("Keypair not found"))?;
         let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data)
@@ -134,7 +132,7 @@ pub trait DHTEntity {
     fn get_id(&self) -> CryptoKey;
     fn get_encryption_key(&self) -> SharedSecret;
     fn get_routing_context(&self) -> RoutingContext;
-    fn get_crypto_system(&self) -> CryptoSystemVLD0;
+    fn get_veilid_api(&self) -> VeilidAPI;
     fn get_dht_record(&self) -> DHTRecordDescriptor;
     fn get_secret_key(&self) -> Option<CryptoKey>;
 
@@ -149,25 +147,34 @@ pub trait DHTEntity {
     }
 
     fn encrypt_aead(&self, data: &[u8], associated_data: Option<&[u8]>) -> Result<Vec<u8>> {
-        let nonce = self.get_crypto_system().random_nonce();
+        let veilid = self.get_veilid_api();
+        let crypto = veilid.crypto()?;
+        let crypto_system = crypto
+            .get(CRYPTO_KIND_VLD0)
+            .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
+        let nonce = crypto_system.random_nonce();
         let mut buffer = Vec::with_capacity(nonce.as_slice().len() + data.len());
         buffer.extend_from_slice(nonce.as_slice());
-        buffer.extend_from_slice(
-            &self
-                .get_crypto_system()
-                .encrypt_aead(data, &nonce, &self.get_encryption_key(), associated_data)
-                .map_err(|e| anyhow!("Failed to encrypt data: {}", e))?,
-        );
+        let encrypted_chunk = crypto_system
+            .encrypt_aead(data, &nonce, &self.get_encryption_key(), associated_data)
+            .map_err(|e| anyhow!("Failed to encrypt data: {}", e))?;
+        buffer.extend_from_slice(&encrypted_chunk);
         Ok(buffer)
     }
 
     fn decrypt_aead(&self, data: &[u8], associated_data: Option<&[u8]>) -> Result<Vec<u8>> {
+        let veilid = self.get_veilid_api();
+        let crypto = veilid.crypto()?;
+        let crypto_system = crypto
+            .get(CRYPTO_KIND_VLD0)
+            .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
+
         let nonce: [u8; 24] = data[..24]
             .try_into()
             .map_err(|_| anyhow!("Failed to convert nonce slice to array"))?;
         let nonce = Nonce::new(nonce);
         let encrypted_data = &data[24..];
-        self.get_crypto_system()
+        crypto_system
             .decrypt_aead(
                 encrypted_data,
                 &nonce,
