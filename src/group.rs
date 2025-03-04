@@ -280,11 +280,41 @@ impl Group {
         let keypair = None;
 
         let veilid = self.get_veilid_api();
+        let mut dht_record: Option<DHTRecordDescriptor> = None;
+        let mut retries = 6;
 
-        let dht_record = self
-            .routing_context
-            .open_dht_record(repo_id.clone(), keypair)
-            .await?;
+        while retries > 0 {
+            retries -= 1;
+            let dht_record_result = self
+                .routing_context
+                .open_dht_record(repo_id.clone(), keypair.clone())
+                .await;
+
+            match dht_record_result {
+                Ok(record) => {
+                    dht_record = Some(record);
+                    break;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Failed to open DHT record: {}. Retries left: {}",
+                        e, retries
+                    );
+                    if retries == 0 {
+                        return Err(anyhow!(
+                            "Unable to open DHT record, reached max retries: {}",
+                            e
+                        ));
+                    }
+                }
+            }
+
+            // Add a delay before retrying (wit exponential backoff)
+            tokio::time::sleep(std::time::Duration::from_millis(100 * (7 - retries) as u64)).await;
+        }
+
+        // Ensure that `dht_record` is set before proceeding
+        let dht_record = dht_record.ok_or_else(|| anyhow!("DHT record retrieval failed"))?;
 
         let repo = Repo {
             dht_record,

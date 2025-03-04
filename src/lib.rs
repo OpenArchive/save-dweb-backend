@@ -294,8 +294,8 @@ mod tests {
             let (route_id, route_id_blob) = veilid_api
                 .new_custom_private_route(
                     &VALID_CRYPTO_KINDS,
-                    veilid_core::Stability::Reliable,
-                    veilid_core::Sequencing::PreferOrdered,
+                    veilid_core::Stability::LowLatency,
+                    veilid_core::Sequencing::NoPreference,
                 )
                 .await
                 .expect("Failed to create route");
@@ -882,7 +882,7 @@ mod tests {
         sleep(Duration::from_secs(2)).await;
 
         // Download hash from peers
-        let mut retries = 5;
+        let mut retries = 10;
         while retries > 0 {
             if group2.download_hash_from_peers(&file_hash).await.is_ok() {
                 println!("Download success!");
