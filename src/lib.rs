@@ -294,8 +294,8 @@ mod tests {
             let (route_id, route_id_blob) = veilid_api
                 .new_custom_private_route(
                     &VALID_CRYPTO_KINDS,
-                    veilid_core::Stability::Reliable,
-                    veilid_core::Sequencing::PreferOrdered,
+                    veilid_core::Stability::LowLatency,
+                    veilid_core::Sequencing::NoPreference,
                 )
                 .await
                 .expect("Failed to create route");
