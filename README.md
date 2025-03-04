@@ -42,17 +42,37 @@ The *Save* DWeb Backend relies on two P2P protocols, [Veilid](https://veilid.com
 
 ###  Save App Architecture
 
-
-
-![P2P Sync Diagram](./docs/diagrams/data-sync.png)
+```mermaid
+graph TD;
+    A["Android Kotlin"] -->|RPC| B["P2P Daemon Rust"];
+    C["iOS Swift"] -->|RPC| B;
+    B --> D["Data Repo"];
+    D --> E["Personal Data"];
+    D --> F["External"];
+    G["Sync Admin"] -->|View/Remove<br>Via veilid?| H["Sync Server"];
+    B -.->|Code reuse| H;
+    I --> H;
+    H --> I["P2P Sync Group"];
+    I -->|View, Replicate| J["Other peers"];
+    J -->|Add archives| I;
+```
 
 P2P Data Synchronization and Replication Architecture
 
 
 ### P2P Connections
 
-![Group Data Retrieval](./docs/diagrams/group-retrieval.png)
-
+```mermaid
+graph TD;
+    A["groupId"] -->|Find peers| B["veilidKeyValue"];
+    B --> C["veilidTunnels"];
+    C --> D["irohStorageVerification"];
+    D --> E["irohDocs"];
+    E --> F["groupDoc"];
+    F --> G["personalRepo"];
+    G --> H["CBORFileList"];
+    D --> H;  
+```
 
 Group Data Retrieval and Verification Flow
 
@@ -155,9 +175,23 @@ Groups are the fundamental organizational unit in the system, enabling secure pe
 
 ## 2.3 Network Topology
 
-
-![DWeb Sync and Communication Flow](./docs/diagrams/decentralized-sync-and-comms-flow.png)
-
+```mermaid
+graph TD;
+    A["BOOTSTRAP"] -->|Node List| B["YOU!"];
+    B -->|Find Self| A;
+    
+    B -->|Ping| C["HEADLESS"];
+    C -->|Status| B;
+    B -->|Status| D["DWEB BACKEND DAEMON"];
+    D -->|Ping| B;
+    D -->|Gossip via app calls| E["SYNC GROUP"];
+    
+    C -->|Signal| F["MOBILE APP"];
+    F -->|Signal| C;
+    
+    G -->|View, Replicate| E;
+    E -->|Add archives| G["PEER"];
+```
 
 Decentralized Web Synchronization and Communication Flow
 
@@ -167,9 +201,25 @@ Decentralized Web Synchronization and Communication Flow
 
 ### Data Flow Diagram
 
+```mermaid
+graph TD;
+    A["Backend Initialization"] --> B["Group Management"];
+    B --> C["Repository Operations"];
+    B --> D["Create/Join Groups"];
+    B --> E["Manage Members"];
+    
+    C --> F["Peer Communication"];
+    C --> G["Create Repos"];
+    
+    F --> H["Route Updates"];
+    F --> I["Data Replication"];
+    
+    G --> J["File Transfer"];
+    
+    D --> K["Update Routes"];
 
-![Data Flow](./docs/diagram/data-flow.png)
- 
+```
+
 Data flow diagram illustrating the interactions between the core components
 
 
@@ -236,11 +286,30 @@ We use AppCalls to ensure ordering for tunnels. Each message for a tunnel is sen
 The first message (PING) sent through a tunnel contains the bytes [0x07, 0x02, 0x08, 0x03] (SAVE on a phone dial pad) followed by the route ID blob needed to register the route with Veilid. When a peer gets a tunnel ID it has not seen before it should attempt to check if the message contains the PING and if not ignore the tunnel. If the PING is present, the application should register the tunnel and listen for subsequent messages. The Route ID from the tunnel ID is where responses must be sent.
 
 
+```mermaid
+sequenceDiagram
+    participant AppA
+    participant TunnelsA
+    participant TunnelsB
+    participant AppB
 
+    AppA->>TunnelsA: Open New Tunnel to RouteIDB:Blob
+    note right of TunnelsA: Register RouteIDB:Blob <br> with Veilid and get RouteIDB
+    note right of TunnelsA: Create Tunnel ID <br> (u32:RouteIDA)
+    
+    TunnelsA->>TunnelsB: (u32:RouteIDA)PING(RouteIDA:Blob)
+        TunnelsA->>AppA: New Tunnel (u32:RouteIDB)
 
-![Tunnels and RouteIDs](./docs/diagrams/tunnels.png)
+    note right of TunnelsB: Verify PING
+    note right of TunnelsB: Register RouteIDA:Blob
+    
+    TunnelsB->>AppB: New Tunnel (u32:RouteIDA)
+    AppB->>TunnelsB: Send BYTES to (u32:RouteIDA)
+    
+    TunnelsB->>TunnelsA: (u32:RouteIDB)(BYTES)
+    AppA->>TunnelsA: New data (u32:RouteIDB): BYTES
 
-
+```
 Tunnels and RouteIDs communication flow in Veilid
 
 
