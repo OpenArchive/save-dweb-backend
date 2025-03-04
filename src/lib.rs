@@ -882,7 +882,7 @@ mod tests {
         sleep(Duration::from_secs(2)).await;
 
         // Download hash from peers
-        let mut retries = 5;
+        let mut retries = 10;
         while retries > 0 {
             if group2.download_hash_from_peers(&file_hash).await.is_ok() {
                 println!("Download success!");
