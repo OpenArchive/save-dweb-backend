@@ -31,6 +31,7 @@ mod tests {
     use anyhow::Result;
     use bytes::Bytes;
     use common::init_veilid;
+    use common::make_route;
     use rpc::RpcClient;
     use rpc::RpcService;
     use std::path::Path;
@@ -291,14 +292,9 @@ mod tests {
             );
 
             // Create a new private route
-            let (route_id, route_id_blob) = veilid_api
-                .new_custom_private_route(
-                    &VALID_CRYPTO_KINDS,
-                    veilid_core::Stability::LowLatency,
-                    veilid_core::Sequencing::NoPreference,
-                )
-                .await
-                .expect("Failed to create route");
+            let (route_id, route_id_blob) = make_route(&veilid_api)
+            .await
+            .expect("Failed to create route after retries");
 
             // Store the route_id_blob in DHT
             repo.store_route_id_in_dht(route_id_blob.clone())
