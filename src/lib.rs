@@ -293,8 +293,8 @@ mod tests {
 
             // Create a new private route
             let (route_id, route_id_blob) = make_route(&veilid_api)
-            .await
-            .expect("Failed to create route after retries");
+                .await
+                .expect("Failed to create route after retries");
 
             // Store the route_id_blob in DHT
             repo.store_route_id_in_dht(route_id_blob.clone())
