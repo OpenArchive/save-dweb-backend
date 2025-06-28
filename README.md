@@ -23,9 +23,9 @@ The *Save* DWeb Backend relies on two P2P protocols, [Veilid](https://veilid.com
 * **Blob**: A binary large object, typically used to store files or data collections in the backend.
 * **Veilid**: A protocol used for secure peer discovery and communication.
 * **Iroh**: A library for blob replication and data storage.
-* **Route ID: **A unique identifier for communication paths between peers.
-* **AppCall: **Veilid’s encrypted message system.
-* **Tunnel: **Multiplexed connection system used for peer communication.
+* **Route ID**: A unique identifier for communication paths between peers.
+* **AppCall**: Veilid’s encrypted message system.
+* **Tunnel**: Multiplexed connection system used for peer communication.
 
 
 ## 1.3 Complementary resources 
@@ -169,8 +169,8 @@ Groups are the fundamental organizational unit in the system, enabling secure pe
 
 
 
-* Personal Data:** **CBOR encoded list of file names mapping to file hashes
-* External Data:** **Peers track other peers’ data repositories and can optionally download blobs for backups.
+* **Personal Data**: CBOR encoded list of file names mapping to file hashes
+* **External Data**: Peers track other peers’ data repositories and can optionally download blobs for backups.
 
 
 ## 2.3 Network Topology
