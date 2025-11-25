@@ -17,7 +17,7 @@ use crate::common::{CommonKeypair, DHTEntity};
 
 use iroh_blobs::Hash;
 use veilid_core::{
-    vld0_generate_keypair, CryptoKey, CryptoTyped, TypedKey, VeilidUpdate, CRYPTO_KIND_VLD0,
+    PublicKey, SecretKey, RecordKey, CryptoTyped, TypedRecordKey, VeilidUpdate, CRYPTO_KIND_VLD0,
     VALID_CRYPTO_KINDS,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
@@ -48,7 +48,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn blob_transfer() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend").await.unwrap();
+        let path = TmpDir::new("blob_transfer").await.unwrap();
 
         fs::create_dir_all(path.as_ref())
             .await
@@ -99,7 +99,7 @@ mod tests {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(bytes) => retrieved_data.extend_from_slice(bytes.as_ref()),
-                Err(e) => panic!("Error reading data: {:?}", e),
+                Err(e) => panic!("Error reading data: {e:?}"),
             }
         }
 
@@ -209,7 +209,7 @@ mod tests {
         let repo = group.create_repo().await.expect("Unable to create repo");
 
         let repo_key = repo.get_id();
-        assert!(repo_key != CryptoKey::default(), "Repo ID should be set");
+        assert!(repo_key != RecordKey::default(), "Repo ID should be set");
 
         // Step 3: Set and verify the repo name
         let repo_name = "Test Repo";
@@ -287,8 +287,7 @@ mod tests {
             });
 
             println!(
-                "Creating a new custom private route with valid crypto kinds: {:?}",
-                VALID_CRYPTO_KINDS
+                "Creating a new custom private route with valid crypto kinds: {VALID_CRYPTO_KINDS:?}"
             );
 
             // Create a new private route
@@ -420,8 +419,7 @@ mod tests {
         // Restart backend and verify group and repo persistence
         backend.start().await.expect("Unable to restart backend");
         println!(
-            "Backend restarted, attempting to load group with ID: {:?}",
-            group_id
+            "Backend restarted, attempting to load group with ID: {group_id:?}"
         );
 
         let mut reload_group = backend.get_group(&group_id).await.expect(GROUP_NOT_FOUND);
@@ -434,15 +432,14 @@ mod tests {
         // Restart backend and verify group and repo persistence
         backend.start().await.expect("Unable to restart backend");
         println!(
-            "Backend restarted, attempting to load group with ID: {:?}",
-            loaded_group_id
+            "Backend restarted, attempting to load group with ID: {loaded_group_id:?}"
         );
 
         let mut loaded_group = backend
             .get_group(&loaded_group_id)
             .await
             .expect(GROUP_NOT_FOUND);
-        println!("group reloaded with id: {:?}", loaded_group_id);
+        println!("group reloaded with id: {loaded_group_id:?}");
         let repo = loaded_group
             .create_repo()
             .await
@@ -457,7 +454,7 @@ mod tests {
         assert_eq!(initial_name, repo_name, "Initial repo name doesn't match");
 
         let repo_id = repo.id();
-        println!("lib: Repo created with id: {:?}", repo_id);
+        println!("lib: Repo created with id: {repo_id:?}");
 
         // Check if the repo is listed after restart
         let list = loaded_group.list_repos().await;
@@ -468,7 +465,7 @@ mod tests {
             .await
             .expect("Repo not found after restart");
 
-        println!("a list of repos: {:?}", list);
+        println!("a list of repos: {list:?}");
 
         let retrieved_name = loaded_repo
             .get_name()
@@ -502,7 +499,7 @@ mod tests {
 
         let another_list = reloaded_group.list_repos().await;
 
-        println!("Another list of repos: {:?}", another_list);
+        println!("Another list of repos: {another_list:?}");
 
         let reloaded_repo = reloaded_group
             .get_own_repo()
@@ -600,7 +597,7 @@ mod tests {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(bytes) => retrieved_data.extend_from_slice(bytes.as_ref()),
-                Err(e) => panic!("Error reading data: {:?}", e),
+                Err(e) => panic!("Error reading data: {e:?}"),
             }
         }
 
@@ -608,6 +605,9 @@ mod tests {
         assert_eq!(retrieved_data, file_content);
 
         backend.stop().await.expect("Unable to stop");
+
+        // Give Veilid time to fully shutdown
+        tokio::time::sleep(Duration::from_millis(500)).await;
         Ok(())
     }
     #[tokio::test]
@@ -689,7 +689,7 @@ mod tests {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(bytes) => retrieved_data.extend_from_slice(bytes.as_ref()),
-                Err(e) => panic!("Error reading data: {:?}", e),
+                Err(e) => panic!("Error reading data: {e:?}"),
             }
         }
 
@@ -697,6 +697,9 @@ mod tests {
         assert_eq!(retrieved_data, file_content);
 
         backend.stop().await.expect("Unable to stop");
+
+        // Give Veilid time to fully shutdown
+        tokio::time::sleep(Duration::from_millis(500)).await;
         Ok(())
     }
 
@@ -1368,6 +1371,9 @@ mod tests {
         let rpc_instance = RpcService::from_backend(&backend).await?;
 
         backend.stop().await.expect("Unable to stop backend");
+
+        // Give Veilid time to fully shutdown
+        tokio::time::sleep(Duration::from_millis(500)).await;
         Ok(())
     }
 
@@ -1380,41 +1386,62 @@ mod tests {
             .await
             .expect("Failed to create base directory");
 
+        println!("Initializing client Veilid instance...");
         let (veilid2, _) = init_veilid(
             &path.to_path_buf().join("client"),
-            "save-dweb-backup".to_string(),
+            "save-dweb-backup-client".to_string(),
         )
-        .await?;
+        .await
+        .map_err(|e| anyhow!("Failed to init client Veilid: {}", e))?;
 
+        println!("Starting backend...");
         let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
         backend.start().await.expect("Unable to start");
 
+        println!("Creating RPC service...");
         let rpc_instance = RpcService::from_backend(&backend).await?;
 
-        let rpc_instance_updater = RpcService::from_backend(&backend).await?;
-
+        println!("Starting RPC service listener...");
+        let rpc_listener = rpc_instance.clone();
         tokio::spawn(async move {
-            rpc_instance_updater.start_update_listener().await.unwrap();
+            if let Err(e) = rpc_listener.start_update_listener().await {
+                eprintln!("RPC listener error: {}", e);
+            }
         });
 
+        println!("Setting RPC service name...");
         rpc_instance.set_name("Example").await?;
 
         let url = rpc_instance.get_descriptor_url();
+        println!("RPC service URL: {}", url);
 
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        // Wait longer for DHT propagation between two separate Veilid instances
+        println!("Waiting 10 seconds for DHT propagation...");
+        tokio::time::sleep(Duration::from_secs(10)).await;
 
-        let client = RpcClient::from_veilid(veilid2.clone(), &url).await?;
+        println!("Creating RPC client...");
+        let client = RpcClient::from_veilid(veilid2.clone(), &url).await
+            .map_err(|e| anyhow!("Failed to create RPC client: {}", e))?;
 
-        let name = client.get_name().await?;
+        println!("Getting name from RPC service...");
+        let name = client.get_name().await
+            .map_err(|e| anyhow!("Failed to get name: {}", e))?;
 
         assert_eq!(name, "Example", "Unable to get name");
 
-        let list = client.list_groups().await?;
+        println!("Listing groups...");
+        let list = client.list_groups().await
+            .map_err(|e| anyhow!("Failed to list groups: {}", e))?;
 
         assert_eq!(list.group_ids.len(), 0, "No groups on init");
 
+        println!("Stopping backend...");
         backend.stop().await.expect("Unable to stop backend");
         veilid2.shutdown().await;
+
+        // Give Veilid time to fully shutdown
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        println!("Test completed successfully!");
         Ok(())
     }
 }

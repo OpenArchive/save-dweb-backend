@@ -14,7 +14,7 @@ use std::{io::ErrorKind, path::PathBuf};
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use veilid_core::{
-    CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, ProtectedStore, RoutingContext,
+    PublicKey, SecretKey, RecordKey, CryptoTyped, DHTRecordDescriptor, ProtectedStore, RoutingContext,
     SharedSecret, Target, VeilidAPI, VeilidUpdate,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
@@ -26,7 +26,7 @@ pub const ROUTE_SUBKEY: u32 = 2;
 pub struct Repo {
     pub dht_record: DHTRecordDescriptor,
     pub encryption_key: SharedSecret,
-    pub secret_key: Option<CryptoTyped<CryptoKey>>,
+    pub secret_key: Option<SecretKey>,
     pub routing_context: RoutingContext,
     pub veilid: VeilidAPI,
     pub iroh_blobs: VeilidIrohBlobs,
@@ -36,7 +36,7 @@ impl Repo {
     pub fn new(
         dht_record: DHTRecordDescriptor,
         encryption_key: SharedSecret,
-        secret_key: Option<CryptoTyped<CryptoKey>>,
+        secret_key: Option<SecretKey>,
         routing_context: RoutingContext,
         veilid: VeilidAPI,
         iroh_blobs: VeilidIrohBlobs,
@@ -51,8 +51,8 @@ impl Repo {
         }
     }
 
-    pub fn id(&self) -> CryptoKey {
-        self.dht_record.key().value.clone()
+    pub fn id(&self) -> RecordKey {
+        self.dht_record.key().value
     }
 
     pub fn can_write(&self) -> bool {
@@ -182,7 +182,7 @@ impl Repo {
             // Try to get the collection hash from the DHT (remote or unwritable repos)
             if let Ok(collection_hash) = self.get_hash_from_dht().await {
                 // The collection hash is found, return it directly (no need for a name)
-                println!("Collection hash found in DHT: {:?}", collection_hash);
+                println!("Collection hash found in DHT: {collection_hash:?}");
                 return Ok(collection_hash);
             } else {
                 // Error if we're trying to create a collection in a read-only repo
@@ -195,25 +195,25 @@ impl Repo {
         let collection_name = self.get_name().await?;
         if let Ok(collection_hash) = self.iroh_blobs.collection_hash(&collection_name).await {
             // Collection exists, return the hash
-            println!("Collection hash found in store: {:?}", collection_hash);
+            println!("Collection hash found in store: {collection_hash:?}");
             Ok(collection_hash)
         } else {
             // Create a new collection
             println!("Creating new collection...");
             let new_hash = match self.iroh_blobs.create_collection(&collection_name).await {
                 Ok(hash) => {
-                    println!("New collection created with hash: {:?}", hash);
+                    println!("New collection created with hash: {hash:?}");
                     hash
                 }
                 Err(e) => {
-                    eprintln!("Failed to create collection: {:?}", e);
+                    eprintln!("Failed to create collection: {e:?}");
                     return Err(e);
                 }
             };
 
             // Update the DHT with the new collection hash
             if let Err(e) = self.update_collection_on_dht().await {
-                eprintln!("Failed to update DHT: {:?}", e);
+                eprintln!("Failed to update DHT: {e:?}");
                 return Err(e);
             }
 
@@ -240,11 +240,9 @@ impl Repo {
             let got_hash = self.get_hash_from_dht().await;
 
             // Return empty list if we can't fetch from the DHT
-            if got_hash.is_err() {
-                Ok(Vec::new())
-            } else {
-                self.list_files_from_collection_hash(&got_hash.unwrap())
-                    .await
+            match got_hash {
+                Ok(hash) => self.list_files_from_collection_hash(&hash).await,
+                Err(_) => Ok(Vec::new()),
             }
         }
     }
@@ -334,22 +332,20 @@ impl Repo {
             .iroh_blobs
             .set_file(collection_name, file_name, file_hash)
             .await?;
-        println!("Updated collection hash: {:?}", updated_collection_hash);
+        println!("Updated collection hash: {updated_collection_hash:?}");
 
         // Step 2: Persist the new collection hash locally
         self.iroh_blobs
             .persist_collection_with_name(collection_name, &updated_collection_hash)
             .await?;
         println!(
-            "Collection persisted with new hash: {:?}",
-            updated_collection_hash
+            "Collection persisted with new hash: {updated_collection_hash:?}"
         );
 
         // Step 3: Update the DHT with the new collection hash
         self.update_collection_on_dht().await?;
         println!(
-            "DHT updated with new collection hash: {:?}",
-            updated_collection_hash
+            "DHT updated with new collection hash: {updated_collection_hash:?}"
         );
 
         Ok(updated_collection_hash)
@@ -365,8 +361,8 @@ impl Repo {
 }
 
 impl DHTEntity for Repo {
-    fn get_id(&self) -> CryptoKey {
-        self.id().clone()
+    fn get_id(&self) -> RecordKey {
+        self.id()
     }
 
     fn get_encryption_key(&self) -> SharedSecret {
@@ -385,7 +381,7 @@ impl DHTEntity for Repo {
         self.dht_record.clone()
     }
 
-    fn get_secret_key(&self) -> Option<CryptoKey> {
-        self.secret_key.clone().map(|key| key.value)
+    fn get_secret_key(&self) -> Option<SecretKey> {
+        self.secret_key
     }
 }

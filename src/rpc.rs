@@ -1,4 +1,4 @@
-use crate::backend::{crypto_key_from_query, Backend};
+use crate::backend::{record_key_from_query, Backend};
 use crate::common::DHTEntity;
 use crate::group::Group;
 use crate::repo::Repo;
@@ -22,8 +22,8 @@ use tokio::sync::broadcast::error::RecvError;
 use tracing::{error, info};
 use url::Url;
 use veilid_core::{
-    vld0_generate_keypair, CryptoKey, CryptoSystem, CryptoSystemVLD0, DHTRecordDescriptor,
-    DHTSchema, KeyPair, RoutingContext, SharedSecret, Target, TypedKey, VeilidAPI, VeilidAppCall,
+    PublicKey, SecretKey, RecordKey, CryptoSystem, DHTRecordDescriptor,
+    DHTSchema, KeyPair, RoutingContext, SharedSecret, Target, TypedRecordKey, VeilidAPI, VeilidAppCall,
     VeilidUpdate, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::tunnels::OnNewRouteCallback;
@@ -93,9 +93,9 @@ pub struct RpcClient {
 pub fn parse_url_for_rpc(url_string: &str) -> Result<RpcKeys> {
     let url = Url::parse(url_string)?;
 
-    let dht_key = crypto_key_from_query(&url, URL_DHT_KEY)
+    let dht_key = record_key_from_query(&url, URL_DHT_KEY)
         .map_err(|_| anyhow!("Missing 'dht' key in the URL"))?;
-    let encryption_key = crypto_key_from_query(&url, URL_ENCRYPTION_KEY)
+    let encryption_key = crate::backend::shared_secret_from_query(&url, URL_ENCRYPTION_KEY)
         .map_err(|_| anyhow!("Missing 'enc' key in the URL"))?;
 
     Ok(RpcKeys {
@@ -209,7 +209,7 @@ impl RpcClient {
 
 #[derive(Clone)]
 pub struct RpcKeys {
-    pub dht_key: CryptoKey,
+    pub dht_key: RecordKey,
     pub encryption_key: SharedSecret,
 }
 
@@ -229,10 +229,10 @@ impl RpcServiceDescriptor {
     ) -> Result<Self> {
         let keys = parse_url_for_rpc(url)?;
 
-        let record_key = TypedKey::new(CRYPTO_KIND_VLD0, keys.dht_key);
+        let record_key = TypedRecordKey::new(CRYPTO_KIND_VLD0, keys.dht_key);
 
         let dht_record = routing_context
-            .open_dht_record(record_key.clone(), None)
+            .open_dht_record(record_key, None)
             .await
             .map_err(|e| anyhow!("Failed to open DHT record: {}", e))?;
 
@@ -247,7 +247,7 @@ impl RpcServiceDescriptor {
     }
 
     pub fn get_url(&self) -> String {
-        let mut url = Url::parse(format!("{0}:?", PROTOCOL_SCHEME).as_str()).unwrap();
+        let mut url = Url::parse(format!("{PROTOCOL_SCHEME}:?").as_str()).unwrap();
 
         url.query_pairs_mut()
             .append_pair(URL_DHT_KEY, self.get_id().encode_hex::<String>().as_str())
@@ -312,7 +312,7 @@ impl RpcService {
         let encryption_key = crypto_system.random_shared_secret();
 
         let keypair = RpcKeys {
-            dht_key: dht_record.key().value.clone(),
+            dht_key: dht_record.key().value,
             encryption_key,
         };
 
@@ -334,8 +334,7 @@ impl RpcService {
                     .await
                 {
                     eprintln!(
-                        "Unable to update route after rebuild for RPC service: {}",
-                        err
+                        "Unable to update route after rebuild for RPC service: {err}"
                     );
                 }
             });
@@ -489,7 +488,7 @@ impl RpcService {
 
         match backend.join_from_url(&group_url).await {
             Ok(group) => {
-                let repo_keys: Vec<CryptoKey> = group.list_repos().await;
+                let repo_keys: Vec<RecordKey> = group.list_repos().await;
 
                 for repo_key in repo_keys {
                     if let Ok(repo) = group.get_repo(&repo_key).await {
@@ -502,8 +501,7 @@ impl RpcService {
                 RpcResponse {
                     success: Some(JoinGroupResponse {
                         status_message: format!(
-                            "Successfully joined and replicated group from URL: {}",
-                            group_url
+                            "Successfully joined and replicated group from URL: {group_url}"
                         ),
                     }),
                     error: None,
@@ -511,7 +509,7 @@ impl RpcService {
             }
             Err(err) => RpcResponse {
                 success: None,
-                error: Some(format!("Failed to join group: {}", err)),
+                error: Some(format!("Failed to join group: {err}")),
             },
         }
     }
@@ -528,7 +526,7 @@ impl RpcService {
             },
             Err(err) => RpcResponse {
                 success: None,
-                error: Some(format!("Failed to list groups: {}", err)),
+                error: Some(format!("Failed to list groups: {err}")),
             },
         }
     }
@@ -547,7 +545,7 @@ impl RpcService {
             Err(err) => {
                 return RpcResponse {
                     success: None,
-                    error: Some(format!("Failed to decode group ID: {}", err)),
+                    error: Some(format!("Failed to decode group ID: {err}")),
                 };
             }
         };
@@ -562,18 +560,18 @@ impl RpcService {
             }
         };
 
-        let group_key = CryptoKey::new(group_bytes);
+        let group_key = RecordKey::new(group_bytes);
 
         match backend.close_group(group_key).await {
             Ok(_) => RpcResponse {
                 success: Some(RemoveGroupResponse {
-                    status_message: format!("Successfully removed group: {}", group_id),
+                    status_message: format!("Successfully removed group: {group_id}"),
                 }),
                 error: None,
             },
             Err(err) => RpcResponse {
                 success: None,
-                error: Some(format!("Failed to remove group: {}", err)),
+                error: Some(format!("Failed to remove group: {err}")),
             },
         }
     }
@@ -641,7 +639,7 @@ async fn replicate_repo(group: &Group, repo: &Repo) -> Result<()> {
 }
 
 async fn download(group: &Group, hash: &Hash) -> Result<()> {
-    let repo_keys: Vec<CryptoKey> = group.list_repos().await;
+    let repo_keys: Vec<RecordKey> = group.list_repos().await;
 
     if repo_keys.is_empty() {
         return Err(anyhow!("Cannot download hash. No repos found"));
@@ -683,11 +681,11 @@ impl DHTEntity for RpcServiceDescriptor {
         Ok(())
     }
 
-    fn get_id(&self) -> CryptoKey {
-        self.dht_record.key().value.clone()
+    fn get_id(&self) -> RecordKey {
+        self.dht_record.key().value
     }
 
-    fn get_secret_key(&self) -> Option<CryptoKey> {
+    fn get_secret_key(&self) -> Option<SecretKey> {
         None
     }
 

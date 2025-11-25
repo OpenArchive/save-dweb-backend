@@ -1,13 +1,13 @@
 [package]
 name = "save-dweb-backend"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
 iroh = "0.24.0"
 iroh-blobs = "0.24.0"
-veilid-core = { git = "https://gitlab.com/veilid/veilid.git", version = "0.4.3" }
-veilid-iroh-blobs = { git = "https://github.com/RangerMauve/veilid-iroh-blobs.git", version = "0.1.1" }
+veilid-core = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.4.8" }
+veilid-iroh-blobs = { git = "https://github.com/RangerMauve/veilid-iroh-blobs.git", tag = "v0.2.0" }
 tracing = "0.1"
 xdg = "2.4"
 tmpdir = "1"

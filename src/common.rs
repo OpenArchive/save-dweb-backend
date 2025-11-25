@@ -7,9 +7,9 @@ use std::{path::Path, path::PathBuf, sync::Arc};
 use tokio::sync::broadcast::{self, Receiver};
 use url::Url;
 use veilid_core::{
-    CryptoKey, CryptoSystem, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, KeyPair, Nonce,
+    PublicKey, SecretKey, RecordKey, CryptoSystem, CryptoTyped, DHTRecordDescriptor, KeyPair, Nonce,
     ProtectedStore, RouteId, RoutingContext, Sequencing, SharedSecret, Stability, UpdateCallback,
-    VeilidAPI, VeilidConfigInner, VeilidUpdate, CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
+    VeilidAPI, VeilidConfig, VeilidUpdate, CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
 };
 
 use crate::constants::ROUTE_ID_DHT_KEY;
@@ -29,7 +29,7 @@ pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
         if let Ok(value) = result {
             return Ok(value);
         } else if let Err(e) = &result {
-            eprintln!("Failed to create route: {}", e);
+            eprintln!("Failed to create route: {e}");
         }
     }
     Err(anyhow!("Unable to create route, reached max retries"))
@@ -62,20 +62,29 @@ pub async fn init_veilid(
 
     //println!("Wait for veilid network");
 
-    while let Ok(update) = rx.recv().await {
-        if let VeilidUpdate::Attachment(attachment_state) = update {
-            if attachment_state.public_internet_ready && attachment_state.state.is_attached() {
-                println!("Public internet ready!");
-                break;
+    // Use a timeout to avoid hanging forever
+    let timeout_duration = tokio::time::Duration::from_secs(60);
+    let result = tokio::time::timeout(timeout_duration, async {
+        while let Ok(update) = rx.recv().await {
+            if let VeilidUpdate::Attachment(attachment_state) = update {
+                if attachment_state.public_internet_ready && attachment_state.state.is_attached() {
+                    println!("Public internet ready!");
+                    return Ok(());
+                }
             }
         }
-    }
+        Err(anyhow!("Update channel closed before network ready"))
+    }).await;
 
-    Ok((veilid, rx))
+    match result {
+        Ok(Ok(())) => Ok((veilid, rx)),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(anyhow!("Timeout waiting for Veilid network to become ready")),
+    }
 }
 
-pub fn config_for_dir(base_dir: PathBuf, namespace: String) -> VeilidConfigInner {
-    VeilidConfigInner {
+pub fn config_for_dir(base_dir: PathBuf, namespace: String) -> VeilidConfig {
+    VeilidConfig {
         program_name: "save-dweb-backend".to_string(),
         namespace,
         protected_store: veilid_core::VeilidConfigProtectedStore {
@@ -101,9 +110,9 @@ pub fn config_for_dir(base_dir: PathBuf, namespace: String) -> VeilidConfigInner
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct CommonKeypair {
-    pub id: CryptoKey,
-    pub public_key: CryptoKey,
-    pub secret_key: Option<CryptoKey>,
+    pub id: RecordKey,
+    pub public_key: PublicKey,
+    pub secret_key: Option<SecretKey>,
     pub encryption_key: SharedSecret,
 }
 
@@ -117,7 +126,7 @@ impl CommonKeypair {
         Ok(())
     }
 
-    pub async fn load_keypair(protected_store: &ProtectedStore, id: &CryptoKey) -> Result<Self> {
+    pub async fn load_keypair(protected_store: &ProtectedStore, id: &RecordKey) -> Result<Self> {
         let keypair_data = protected_store
             .load_user_secret(id.to_string())
             .map_err(|_| anyhow!("Failed to load keypair"))?
@@ -129,21 +138,21 @@ impl CommonKeypair {
 }
 
 pub trait DHTEntity {
-    fn get_id(&self) -> CryptoKey;
+    fn get_id(&self) -> RecordKey;
     fn get_encryption_key(&self) -> SharedSecret;
     fn get_routing_context(&self) -> RoutingContext;
     fn get_veilid_api(&self) -> VeilidAPI;
     fn get_dht_record(&self) -> DHTRecordDescriptor;
-    fn get_secret_key(&self) -> Option<CryptoKey>;
+    fn get_secret_key(&self) -> Option<SecretKey>;
 
     // Default method to get the owner key
-    fn owner_key(&self) -> CryptoKey {
-        self.get_dht_record().owner().clone()
+    fn owner_key(&self) -> PublicKey {
+        *self.get_dht_record().owner()
     }
 
     // Default method to get the owner secret
-    fn owner_secret(&self) -> Option<CryptoKey> {
-        self.get_dht_record().owner_secret().cloned()
+    fn owner_secret(&self) -> Option<SecretKey> {
+        self.get_dht_record().owner_secret().copied()
     }
 
     fn encrypt_aead(&self, data: &[u8], associated_data: Option<&[u8]>) -> Result<Vec<u8>> {
@@ -153,8 +162,8 @@ pub trait DHTEntity {
             .get(CRYPTO_KIND_VLD0)
             .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
         let nonce = crypto_system.random_nonce();
-        let mut buffer = Vec::with_capacity(nonce.as_slice().len() + data.len());
-        buffer.extend_from_slice(nonce.as_slice());
+        let mut buffer = Vec::with_capacity(nonce.bytes.len() + data.len());
+        buffer.extend_from_slice(&nonce.bytes);
         let encrypted_chunk = crypto_system
             .encrypt_aead(data, &nonce, &self.get_encryption_key(), associated_data)
             .map_err(|e| anyhow!("Failed to encrypt data: {}", e))?;
@@ -262,7 +271,7 @@ pub trait DHTEntity {
         let route_id = match veilid.import_remote_private_route(route_id_blob) {
             Ok(route) => route,
             Err(e) => {
-                eprintln!("Failed to import remote private route: {:?}", e);
+                eprintln!("Failed to import remote private route: {e:?}");
                 return Err(e.into());
             }
         };
@@ -272,18 +281,18 @@ pub trait DHTEntity {
             .app_message(veilid_core::Target::PrivateRoute(route_id), message)
             .await
         {
-            eprintln!("Failed to send message: {:?}", e);
+            eprintln!("Failed to send message: {e:?}");
             return Err(e.into());
         }
 
         Ok(())
     }
 
-    fn get_write_key(&self) -> Option<CryptoKey> {
+    fn get_write_key(&self) -> Option<PublicKey> {
         unimplemented!("WIP")
     }
 
-    async fn members(&self) -> Result<Vec<CryptoKey>> {
+    async fn members(&self) -> Result<Vec<PublicKey>> {
         unimplemented!("WIP")
     }
 

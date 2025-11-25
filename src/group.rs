@@ -4,7 +4,7 @@ use crate::{common::DHTEntity, repo};
 use anyhow::{anyhow, Error, Result};
 use bytes::Bytes;
 use hex::ToHex;
-use iroh::net::key::SecretKey;
+use iroh::net::key::SecretKey as IrohSecretKey;
 use iroh_blobs::Hash;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
@@ -20,8 +20,8 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use url::Url;
 use veilid_core::{
-    CryptoKey, CryptoSystemVLD0, CryptoTyped, DHTRecordDescriptor, DHTReportScope, DHTSchema,
-    KeyPair, ProtectedStore, RoutingContext, SharedSecret, TypedKey, ValueSubkeyRangeSet,
+    PublicKey, SecretKey, RecordKey, CryptoTyped, DHTRecordDescriptor, DHTReportScope, DHTSchema,
+    KeyPair, ProtectedStore, RoutingContext, SharedSecret, TypedRecordKey, ValueSubkeyRangeSet,
     VeilidAPI, VeilidUpdate, CRYPTO_KEY_LENGTH, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
@@ -37,7 +37,7 @@ pub struct Group {
     pub dht_record: DHTRecordDescriptor,
     pub encryption_key: SharedSecret,
     pub routing_context: RoutingContext,
-    pub repos: Arc<Mutex<HashMap<CryptoKey, Repo>>>,
+    pub repos: Arc<Mutex<HashMap<RecordKey, Repo>>>,
     pub veilid: VeilidAPI,
     pub iroh_blobs: VeilidIrohBlobs,
 }
@@ -60,16 +60,16 @@ impl Group {
         }
     }
 
-    pub fn id(&self) -> CryptoKey {
-        self.dht_record.key().value.clone()
+    pub fn id(&self) -> RecordKey {
+        self.dht_record.key().value
     }
 
-    pub fn owner_key(&self) -> CryptoKey {
-        self.dht_record.owner().clone()
+    pub fn owner_key(&self) -> PublicKey {
+        *self.dht_record.owner()
     }
 
-    pub fn owner_secret(&self) -> Option<CryptoKey> {
-        self.dht_record.owner_secret().cloned()
+    pub fn owner_secret(&self) -> Option<SecretKey> {
+        self.dht_record.owner_secret().copied()
     }
 
     async fn add_repo(&mut self, repo: Repo) -> Result<()> {
@@ -78,7 +78,7 @@ impl Group {
         Ok(())
     }
 
-    pub async fn get_repo(&self, id: &CryptoKey) -> Result<Repo> {
+    pub async fn get_repo(&self, id: &RecordKey) -> Result<Repo> {
         self.repos
             .lock()
             .await
@@ -87,11 +87,11 @@ impl Group {
             .cloned()
     }
 
-    pub async fn has_repo(&self, id: &CryptoKey) -> bool {
+    pub async fn has_repo(&self, id: &RecordKey) -> bool {
         self.repos.lock().await.contains_key(id)
     }
 
-    pub async fn list_repos(&self) -> Vec<CryptoKey> {
+    pub async fn list_repos(&self) -> Vec<RecordKey> {
         self.repos
             .lock()
             .await
@@ -181,7 +181,7 @@ impl Group {
         Ok(receiver)
     }
 
-    pub async fn get_repo_name(&self, repo_key: CryptoKey) -> Result<String> {
+    pub async fn get_repo_name(&self, repo_key: RecordKey) -> Result<String> {
         if let Some(repo) = self.repos.lock().await.get(&repo_key) {
             repo.get_name().await
         } else {
@@ -190,7 +190,7 @@ impl Group {
     }
 
     pub fn get_url(&self) -> String {
-        let mut url = Url::parse(format!("{0}:?", PROTOCOL_SCHEME).as_str()).unwrap();
+        let mut url = Url::parse(format!("{PROTOCOL_SCHEME}:?").as_str()).unwrap();
 
         url.query_pairs_mut()
             .append_pair(URL_DHT_KEY, self.id().encode_hex::<String>().as_str())
@@ -219,7 +219,7 @@ impl Group {
 
         let report = self
             .routing_context
-            .inspect_dht_record(record_key, range, scope)
+            .inspect_dht_record(record_key, Some(range), scope)
             .await?;
 
         let size = report.network_seqs().len();
@@ -247,7 +247,7 @@ impl Group {
             .await
             .ok_or_else(|| anyhow!("No own repo found for group"))?;
 
-        let repo_key = repo.id().to_vec();
+        let repo_key = repo.id().bytes.to_vec();
 
         let count = self.dht_repo_count().await? + 1;
 
@@ -265,7 +265,7 @@ impl Group {
 
     pub async fn load_repo_from_network(
         &mut self,
-        repo_id: TypedKey,
+        repo_id: TypedRecordKey,
     ) -> Result<Repo, anyhow::Error> {
         // TODO: Load keypair from DHT
         //        let protected_store = self.protected_store().unwrap();
@@ -297,8 +297,7 @@ impl Group {
                 }
                 Err(e) => {
                     eprintln!(
-                        "Failed to open DHT record: {}. Retries left: {}",
-                        e, retries
+                        "Failed to open DHT record: {e}. Retries left: {retries}"
                     );
                     if retries == 0 {
                         return Err(anyhow!(
@@ -330,7 +329,7 @@ impl Group {
         Ok(repo)
     }
 
-    async fn load_repo_from_dht(&mut self, subkey: u32) -> Result<CryptoTyped<CryptoKey>> {
+    async fn load_repo_from_dht(&mut self, subkey: u32) -> Result<TypedRecordKey> {
         let repo_id_raw = self
             .routing_context
             .get_dht_value(self.dht_record.key().clone(), subkey, true)
@@ -350,7 +349,7 @@ impl Group {
 
         repo_id_buffer.copy_from_slice(repo_id_raw.data());
 
-        let repo_id = TypedKey::new(CRYPTO_KIND_VLD0, CryptoKey::from(repo_id_buffer));
+        let repo_id = TypedRecordKey::new(CRYPTO_KIND_VLD0, RecordKey::new(repo_id_buffer));
 
         if self.repos.lock().await.contains_key(&repo_id.value) {
             return Ok(repo_id);
@@ -365,9 +364,9 @@ impl Group {
 
         let mut i = 1;
         while i <= count {
-            println!("Loading from DHT {}", i);
+            println!("Loading from DHT {i}");
             if let Err(e) = self.load_repo_from_dht(i.try_into()?).await {
-                eprintln!("Warning: Failed to load repo {} from DHT: {:?}", i, e);
+                eprintln!("Warning: Failed to load repo {i} from DHT: {e:?}");
             }
             i += 1;
         }
@@ -377,7 +376,7 @@ impl Group {
 
     pub async fn try_load_repo_from_disk(&mut self) -> bool {
         if let Err(err) = self.load_repo_from_disk().await {
-            eprintln!("Unable to load own repo from disk {}", err);
+            eprintln!("Unable to load own repo from disk {err}");
             false
         } else {
             true
@@ -397,7 +396,7 @@ impl Group {
 
         let mut id_bytes: [u8; CRYPTO_KEY_LENGTH] = [0; CRYPTO_KEY_LENGTH];
         id_bytes.copy_from_slice(&key_bytes);
-        let repo_id = TypedKey::new(CRYPTO_KIND_VLD0, CryptoKey::from(id_bytes));
+        let repo_id = TypedRecordKey::new(CRYPTO_KIND_VLD0, RecordKey::new(id_bytes));
 
         let keypair = self.get_repo_keypair(repo_id).await?;
 
@@ -406,15 +405,13 @@ impl Group {
             .open_dht_record(
                 repo_id.clone(),
                 Some(KeyPair::new(
-                    keypair.public_key.clone(),
-                    keypair.secret_key.clone().unwrap(),
+                    keypair.public_key,
+                    keypair.secret_key.unwrap(),
                 )),
             )
             .await?;
 
-        let secret_key = keypair
-            .secret_key
-            .map(|key| TypedKey::new(CRYPTO_KIND_VLD0, key));
+        let secret_key = keypair.secret_key;
 
         let repo = Repo::new(
             dht_record,
@@ -450,14 +447,10 @@ impl Group {
         // Use the group's encryption key for the repo
         let encryption_key = self.get_encryption_key().clone();
 
-        // Wrap the secret key in CryptoTyped for storage
-        let secret_key_typed =
-            CryptoTyped::new(CRYPTO_KIND_VLD0, self.get_secret_key().unwrap().clone());
-
         let repo = Repo::new(
             repo_dht_record.clone(),
             encryption_key,
-            Some(secret_key_typed),
+            self.get_secret_key(),
             self.routing_context.clone(),
             self.veilid.clone(),
             self.iroh_blobs.clone(),
@@ -482,9 +475,9 @@ impl Group {
 
         let mut group_repo_key = self.id().to_string();
         group_repo_key.push_str("-repo");
-        let key_bytes = *repo.id();
+        let key_bytes = repo.id().bytes;
         protected_store
-            .save_user_secret(group_repo_key, key_bytes.as_slice())
+            .save_user_secret(group_repo_key, &key_bytes)
             .map_err(|e| anyhow!("Unable to store repo id for group: {}", e))?;
 
         self.add_repo(repo).await?;
@@ -496,7 +489,7 @@ impl Group {
             .ok_or_else(|| anyhow!("Unexpected error, created repo not persisted"))
     }
 
-    async fn get_repo_keypair(&self, repo_id: TypedKey) -> Result<CommonKeypair> {
+    async fn get_repo_keypair(&self, repo_id: TypedRecordKey) -> Result<CommonKeypair> {
         let protected_store = self.veilid.protected_store()?;
 
         // Load keypair using the repo ID
@@ -531,37 +524,36 @@ impl Group {
             match routing_context
                 .watch_dht_values(
                     dht_record_key.clone(),
-                    range.clone(),
-                    expiration.into(),
-                    count,
+                    Some(range.clone()),
+                    None,
+                    None,
                 )
                 .await
             {
                 Ok(_) => {
                     println!(
-                        "DHT watch successfully set on record key {:?}",
-                        dht_record_key
+                        "DHT watch successfully set on record key {dht_record_key:?}"
                     );
 
                     loop {
                         if let Ok(change) = routing_context
                             .watch_dht_values(
                                 dht_record_key.clone(),
-                                range.clone(),
-                                expiration.into(),
-                                count,
+                                Some(range.clone()),
+                                None,
+                                None,
                             )
                             .await
                         {
-                            if change > 0.into() {
+                            if change {
                                 if let Err(e) = on_change().await {
-                                    eprintln!("Failed to re-download files: {:?}", e);
+                                    eprintln!("Failed to re-download files: {e:?}");
                                 }
                             }
                         }
                     }
                 }
-                Err(e) => eprintln!("Failed to set DHT watch: {:?}", e),
+                Err(e) => eprintln!("Failed to set DHT watch: {e:?}"),
             }
         });
 
@@ -570,8 +562,8 @@ impl Group {
 }
 
 impl DHTEntity for Group {
-    fn get_id(&self) -> CryptoKey {
-        self.id().clone()
+    fn get_id(&self) -> RecordKey {
+        self.id()
     }
 
     fn get_encryption_key(&self) -> SharedSecret {
@@ -590,7 +582,7 @@ impl DHTEntity for Group {
         self.dht_record.clone()
     }
 
-    fn get_secret_key(&self) -> Option<CryptoKey> {
+    fn get_secret_key(&self) -> Option<SecretKey> {
         self.owner_secret()
     }
 }

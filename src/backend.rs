@@ -25,9 +25,9 @@ use tokio::sync::{
 use tracing::info;
 use url::Url;
 use veilid_core::{
-    api_startup_config, vld0_generate_keypair, CryptoKey, CryptoSystem, CryptoSystemVLD0,
-    CryptoTyped, DHTSchema, KeyPair, ProtectedStore, RoutingContext, SharedSecret, TypedKey,
-    UpdateCallback, VeilidAPI, VeilidConfigInner, VeilidConfigProtectedStore, VeilidUpdate,
+    api_startup_config, PublicKey, SecretKey, RecordKey, CryptoSystem,
+    CryptoTyped, DHTSchema, KeyPair, ProtectedStore, RoutingContext, SharedSecret, TypedRecordKey,
+    UpdateCallback, VeilidAPI, VeilidConfig, VeilidConfigProtectedStore, VeilidUpdate,
     CRYPTO_KEY_LENGTH, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
@@ -36,14 +36,14 @@ use xdg::BaseDirectories;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct KnownGroupList {
-    groups: Vec<CryptoKey>,
+    groups: Vec<RecordKey>,
 }
 
 pub struct BackendInner {
     path: PathBuf,
     veilid_api: Option<VeilidAPI>,
     update_rx: Option<broadcast::Receiver<VeilidUpdate>>,
-    groups: HashMap<CryptoKey, Box<Group>>,
+    groups: HashMap<RecordKey, Box<Group>>,
     pub iroh_blobs: Option<VeilidIrohBlobs>,
     on_new_route_callback: Option<OnNewRouteCallback>,
 }
@@ -54,7 +54,7 @@ impl BackendInner {
 
         let info = KnownGroupList { groups };
 
-        println!("Saving group IDs {:?}", info);
+        println!("Saving group IDs {info:?}");
         let data =
             serde_cbor::to_vec(&info).map_err(|e| anyhow!("Failed to serialize keypair: {}", e))?;
         self.veilid()?
@@ -160,16 +160,17 @@ impl Backend {
         let mut inner = backend.inner.lock().await;
 
         // Initialize iroh_blobs
-        inner.iroh_blobs = Some(VeilidIrohBlobs::new(
-            veilid_api.clone(),
-            routing_context,
+        let config = veilid_iroh_blobs::iroh::VeilidIrohBlobsConfig {
+            veilid: veilid_api.clone(),
+            router: routing_context,
             route_id_blob,
             route_id,
-            inner.update_rx.as_ref().unwrap().resubscribe(),
+            updates: inner.update_rx.as_ref().unwrap().resubscribe(),
             store,
-            Some(on_disconnected_callback), // TODO: Notify application of route closure?
-            Some(on_new_route_callback),
-        ));
+            on_route_disconnected_callback: Some(on_disconnected_callback), // TODO: Notify application of route closure?
+            on_new_route_callback: Some(on_new_route_callback),
+        };
+        inner.iroh_blobs = Some(VeilidIrohBlobs::new(config));
 
         drop(inner);
 
@@ -229,16 +230,17 @@ impl Backend {
         });
 
         // Initialize iroh_blobs
-        inner.iroh_blobs = Some(VeilidIrohBlobs::new(
-            veilid_api.clone(),
-            routing_context,
+        let config = veilid_iroh_blobs::iroh::VeilidIrohBlobsConfig {
+            veilid: veilid_api.clone(),
+            router: routing_context,
             route_id_blob,
             route_id,
-            update_rx.resubscribe(),
+            updates: update_rx.resubscribe(),
             store,
-            None, // TODO: Notify application of route closure?
-            Some(on_new_route_callback),
-        ));
+            on_route_disconnected_callback: None, // TODO: Notify application of route closure?
+            on_new_route_callback: Some(on_new_route_callback),
+        };
+        inner.iroh_blobs = Some(VeilidIrohBlobs::new(config));
 
         drop(inner);
 
@@ -300,7 +302,7 @@ impl Backend {
             .get(CRYPTO_KIND_VLD0)
             .ok_or_else(|| anyhow!("Unable to init crypto system"));
 
-        let record_key = TypedKey::new(CRYPTO_KIND_VLD0, keys.id);
+        let record_key = TypedRecordKey::new(CRYPTO_KIND_VLD0, keys.id);
         // First open the DHT record
         let dht_record = routing_context
             .open_dht_record(record_key.clone(), None) // Don't pass a writer here yet
@@ -385,7 +387,7 @@ impl Backend {
         Ok(group)
     }
 
-    pub async fn get_group(&self, record_key: &CryptoKey) -> Result<Box<Group>> {
+    pub async fn get_group(&self, record_key: &RecordKey) -> Result<Box<Group>> {
         let mut inner = self.inner.lock().await;
         if let Some(group) = inner.groups.get(record_key) {
             return Ok(group.clone());
@@ -409,7 +411,7 @@ impl Backend {
         // Use the owner key from the DHT record as the default writer
         let owner_key = retrieved_keypair.public_key; // Call the owner() method to get the owner key
         let owner_secret = retrieved_keypair.secret_key;
-        let record_key = TypedKey::new(CRYPTO_KIND_VLD0, *record_key);
+        let record_key = TypedRecordKey::new(CRYPTO_KIND_VLD0, *record_key);
 
         let owner = owner_secret.map(|secret| KeyPair::new(owner_key, secret));
 
@@ -448,7 +450,7 @@ impl Backend {
         Ok(())
     }
 
-    pub async fn list_known_group_ids(&self) -> Result<Vec<CryptoKey>> {
+    pub async fn list_known_group_ids(&self) -> Result<Vec<RecordKey>> {
         let mut inner = self.inner.lock().await;
         let veilid = inner.veilid()?;
         let data = veilid
@@ -461,7 +463,7 @@ impl Backend {
         Ok(info.groups)
     }
 
-    pub async fn close_group(&self, key: CryptoKey) -> Result<()> {
+    pub async fn close_group(&self, key: RecordKey) -> Result<()> {
         let mut inner = self.inner.lock().await;
         if let Some(group) = inner.groups.remove(&key) {
             group.close().await.map_err(|e| anyhow!(e))?;
@@ -540,23 +542,45 @@ fn find_query(url: &Url, key: &str) -> Result<String> {
     Err(anyhow!("Unable to find parameter {} in URL {:?}", key, url))
 }
 
-pub fn crypto_key_from_query(url: &Url, key: &str) -> Result<CryptoKey> {
+pub fn record_key_from_query(url: &Url, key: &str) -> Result<RecordKey> {
     let value = find_query(url, key)?;
     let bytes = hex::decode(value)?;
-    let mut key_vec: [u8; CRYPTO_KEY_LENGTH] = [0; CRYPTO_KEY_LENGTH];
+    let mut key_vec: [u8; 32] = [0; 32];
     key_vec.copy_from_slice(bytes.as_slice());
+    Ok(RecordKey::new(key_vec))
+}
 
-    let key = CryptoKey::from(key_vec);
-    Ok(key)
+pub fn public_key_from_query(url: &Url, key: &str) -> Result<PublicKey> {
+    let value = find_query(url, key)?;
+    let bytes = hex::decode(value)?;
+    let mut key_vec: [u8; 32] = [0; 32];
+    key_vec.copy_from_slice(bytes.as_slice());
+    Ok(PublicKey::new(key_vec))
+}
+
+pub fn secret_key_from_query(url: &Url, key: &str) -> Result<SecretKey> {
+    let value = find_query(url, key)?;
+    let bytes = hex::decode(value)?;
+    let mut key_vec: [u8; 32] = [0; 32];
+    key_vec.copy_from_slice(bytes.as_slice());
+    Ok(SecretKey::new(key_vec))
+}
+
+pub fn shared_secret_from_query(url: &Url, key: &str) -> Result<SharedSecret> {
+    let value = find_query(url, key)?;
+    let bytes = hex::decode(value)?;
+    let mut key_vec: [u8; 32] = [0; 32];
+    key_vec.copy_from_slice(bytes.as_slice());
+    Ok(SharedSecret::new(key_vec))
 }
 
 pub fn parse_url(url_string: &str) -> Result<CommonKeypair> {
     let url = Url::parse(url_string)?;
 
-    let id = crypto_key_from_query(&url, URL_DHT_KEY)?;
-    let encryption_key = crypto_key_from_query(&url, URL_ENCRYPTION_KEY)?;
-    let public_key = crypto_key_from_query(&url, URL_PUBLIC_KEY)?;
-    let secret_key = Some(crypto_key_from_query(&url, URL_SECRET_KEY)?);
+    let id = record_key_from_query(&url, URL_DHT_KEY)?;
+    let encryption_key = shared_secret_from_query(&url, URL_ENCRYPTION_KEY)?;
+    let public_key = public_key_from_query(&url, URL_PUBLIC_KEY)?;
+    let secret_key = Some(secret_key_from_query(&url, URL_SECRET_KEY)?);
 
     Ok(CommonKeypair {
         id,

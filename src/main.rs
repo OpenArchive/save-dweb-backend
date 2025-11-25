@@ -92,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
             })?;
 
             let group_url = sub_matches.get_one::<String>("group_url").unwrap();
-            println!("Joining group: {}", group_url);
+            println!("Joining group: {group_url}");
 
             let rpc_client = setup_rpc_client(&base_dir, backend_url).await?;
 
@@ -110,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
 
             let response = rpc_client.list_groups().await?;
             for group_id in response.group_ids {
-                println!("Group ID: {}", group_id);
+                println!("Group ID: {group_id}");
             }
         }
         Some(("remove", sub_matches)) => {
@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
             })?;
 
             let group_id = sub_matches.get_one::<String>("group_id").unwrap();
-            println!("Removing group: {}", group_id);
+            println!("Removing group: {group_id}");
 
             let rpc_client = setup_rpc_client(&base_dir, backend_url).await?;
 
