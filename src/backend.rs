@@ -5,6 +5,7 @@ use crate::group::{self, Group, URL_DHT_KEY, URL_ENCRYPTION_KEY, URL_PUBLIC_KEY,
 use crate::repo::Repo;
 use anyhow::{anyhow, Result};
 use clap::builder::Str;
+use hex::ToHex;
 use iroh::node::Node;
 use iroh_blobs::format::collection::Collection;
 use iroh_blobs::util::SetTagOption;
@@ -46,6 +47,7 @@ pub struct BackendInner {
     groups: HashMap<RecordKey, Box<Group>>,
     pub iroh_blobs: Option<VeilidIrohBlobs>,
     on_new_route_callback: Option<OnNewRouteCallback>,
+    initialized: bool,
 }
 
 impl BackendInner {
@@ -73,11 +75,18 @@ impl BackendInner {
     }
 
     fn iroh_blobs(&self) -> Result<VeilidIrohBlobs> {
+        if !self.initialized {
+            return Err(anyhow!("Veilid Iroh Blobs API not initialized. Call start() first and wait for initialization to complete."));
+        }
         Ok(self
             .iroh_blobs
             .as_ref()
             .ok_or_else(|| anyhow!("Veilid Iroh Blobs API not initialized"))?
             .clone())
+    }
+
+    fn is_initialized(&self) -> bool {
+        self.initialized && self.iroh_blobs.is_some() && self.veilid_api.is_some()
     }
 }
 
@@ -95,6 +104,7 @@ impl Backend {
             groups: HashMap::new(),
             iroh_blobs: None,
             on_new_route_callback: None,
+            initialized: false,
         };
 
         let backend = Backend {
@@ -117,6 +127,7 @@ impl Backend {
             groups: HashMap::new(),
             iroh_blobs: None,
             on_new_route_callback: None,
+            initialized: false,
         };
 
         let backend = Backend {
@@ -171,6 +182,8 @@ impl Backend {
             on_new_route_callback: Some(on_new_route_callback),
         };
         inner.iroh_blobs = Some(VeilidIrohBlobs::new(config));
+        inner.initialized = true;
+        info!("Veilid Iroh Blobs initialized via from_dependencies");
 
         drop(inner);
 
@@ -241,6 +254,8 @@ impl Backend {
             on_new_route_callback: Some(on_new_route_callback),
         };
         inner.iroh_blobs = Some(VeilidIrohBlobs::new(config));
+        inner.initialized = true;
+        info!("Veilid Iroh Blobs initialized via start()");
 
         drop(inner);
 
@@ -266,6 +281,7 @@ impl Backend {
             println!("Veilid API shut down successfully");
             inner.groups = HashMap::new();
         }
+        inner.initialized = false;
         Ok(())
     }
 
@@ -293,6 +309,14 @@ impl Backend {
     pub async fn join_group(&self, keys: CommonKeypair) -> Result<Box<Group>> {
         let mut inner = self.inner.lock().await;
 
+        // Check initialization state before proceeding
+        if !inner.is_initialized() {
+            return Err(anyhow!(
+                "Backend not initialized. Ensure start() has been called and completed successfully before joining groups."
+            ));
+        }
+        
+        info!("Joining group - backend is initialized");
         let iroh_blobs = inner.iroh_blobs()?;
         let veilid = inner.veilid()?;
 
@@ -342,6 +366,15 @@ impl Backend {
 
     pub async fn create_group(&self) -> Result<Group> {
         let mut inner = self.inner.lock().await;
+        
+        // Check initialization state before proceeding
+        if !inner.is_initialized() {
+            return Err(anyhow!(
+                "Backend not initialized. Ensure start() has been called and completed successfully before creating groups."
+            ));
+        }
+        
+        info!("Creating group - backend is initialized");
         let iroh_blobs = inner.iroh_blobs()?;
         let veilid = inner.veilid()?;
 
@@ -392,6 +425,14 @@ impl Backend {
         if let Some(group) = inner.groups.get(record_key) {
             return Ok(group.clone());
         }
+        
+        // Check initialization state before proceeding
+        if !inner.is_initialized() {
+            return Err(anyhow!(
+                "Backend not initialized. Ensure start() has been called and completed successfully."
+            ));
+        }
+        
         let iroh_blobs = inner.iroh_blobs()?;
         let veilid = inner.veilid()?;
 
@@ -473,6 +514,21 @@ impl Backend {
         Ok(())
     }
 
+    /// Invalidate cached group, forcing reload from DHT on next access
+    pub async fn invalidate_group_cache(&self, record_key: &RecordKey) {
+        let mut inner = self.inner.lock().await;
+        inner.groups.remove(record_key);
+        info!("Invalidated cache for group {}", record_key.encode_hex::<String>());
+    }
+
+    /// Force refresh a group's repos from DHT
+    pub async fn refresh_group(&self, record_key: &RecordKey) -> Result<Box<Group>> {
+        // Remove from cache
+        self.invalidate_group_cache(record_key).await;
+        // Fetch fresh from DHT
+        self.get_group(record_key).await
+    }
+
     pub async fn create_collection(&self) -> Result<Hash> {
         // Initialize a new Iroh Node in memory
         let node = Node::memory().spawn().await?;
@@ -517,6 +573,12 @@ impl Backend {
     pub async fn get_routing_context(&self) -> Option<RoutingContext> {
         let veilid_api = self.get_veilid_api().await?;
         veilid_api.routing_context().ok()
+    }
+
+    /// Check if the backend is fully initialized and ready to use
+    pub async fn is_initialized(&self) -> bool {
+        let inner = self.inner.lock().await;
+        inner.is_initialized()
     }
 }
 

@@ -4,7 +4,7 @@ use async_stream::stream;
 use bytes::{BufMut, Bytes, BytesMut};
 use core::hash;
 use futures_core::stream::Stream;
-use hex::decode;
+use hex::{decode, ToHex};
 use iroh_blobs::Hash;
 use serde::{Deserialize, Serialize};
 use serde_cbor::from_slice;
@@ -13,9 +13,10 @@ use std::sync::Arc;
 use std::{io::ErrorKind, path::PathBuf};
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
+use tracing::{error, info, warn};
 use veilid_core::{
-    PublicKey, SecretKey, RecordKey, CryptoTyped, DHTRecordDescriptor, ProtectedStore, RoutingContext,
-    SharedSecret, Target, VeilidAPI, VeilidUpdate,
+    PublicKey, SecretKey, RecordKey, CryptoTyped, DHTRecordDescriptor, Nonce, ProtectedStore, RoutingContext,
+    SharedSecret, Target, VeilidAPI, VeilidUpdate, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 
@@ -87,18 +88,35 @@ impl Repo {
 
     pub async fn get_route_id_blob(&self) -> Result<Vec<u8>> {
         if self.can_write() {
-            return Ok(self.iroh_blobs.route_id_blob().await);
+            let blob = self.iroh_blobs.route_id_blob().await;
+            info!("Retrieved route ID blob for writable repo {}", self.id().encode_hex::<String>());
+            return Ok(blob);
         }
 
+        info!(
+            "Getting route ID blob from DHT for repo {} subkey {}",
+            self.dht_record.key().value.encode_hex::<String>(),
+            ROUTE_SUBKEY
+        );
+        
         let value = self
             .routing_context
             .get_dht_value(self.dht_record.key().clone(), ROUTE_SUBKEY, true)
-            .await?
-            .ok_or_else(|| anyhow!("Unable to get DHT value for route id blob"))?
-            .data()
-            .to_vec();
+            .await?;
+        
+        let value = match value {
+            Some(v) => {
+                info!("Route ID blob found in DHT for repo {}", self.id().encode_hex::<String>());
+                v
+            }
+            None => {
+                return Err(anyhow!(
+                    "Unable to get DHT value for route id blob. Repo owner may not have published route yet."
+                ));
+            }
+        };
 
-        Ok(value)
+        Ok(value.data().to_vec())
     }
 
     pub async fn get_file_stream(
@@ -132,31 +150,79 @@ impl Repo {
     }
 
     pub async fn get_hash_from_dht(&self) -> Result<Hash> {
-        let value = self
-            .routing_context
-            .get_dht_value(self.dht_record.key().clone(), HASH_SUBKEY, true)
-            .await?
-            .ok_or_else(|| anyhow!("Unable to get DHT value for repo root hash"))?;
+        let repo_id = self.dht_record.key().value.encode_hex::<String>();
+        info!(
+            "Getting hash from DHT for repo {} subkey {}",
+            repo_id,
+            HASH_SUBKEY
+        );
 
-        let data = value.data();
+        // Retry up to 5 times with exponential backoff
+        let max_retries = 5;
+        let mut retry_count = 0;
+        let mut backoff_ms = 500;
 
-        // Decode the hex string (64 bytes) into a 32-byte hash
-        let decoded_hash = decode(data).expect("Failed to decode hex string");
+        loop {
+            let value = self
+                .routing_context
+                .get_dht_value(self.dht_record.key().clone(), HASH_SUBKEY, true)
+                .await?;
 
-        // Ensure the decoded hash is 32 bytes
-        if decoded_hash.len() != 32 {
-            panic!(
-                "Expected a 32-byte hash after decoding, but got {} bytes",
-                decoded_hash.len()
-            );
+            match value {
+                Some(v) => {
+                    // Successfully got value, decode and return
+                    let data = v.data();
+
+                    // Decode the hex string (64 bytes) into a 32-byte hash
+                    let decoded_hash = match decode(data) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            return Err(anyhow!(
+                                "Failed to decode hex string from DHT: {}. Repo hash may be corrupted.",
+                                e
+                            ));
+                        }
+                    };
+
+                    // Ensure the decoded hash is 32 bytes
+                    if decoded_hash.len() != 32 {
+                        return Err(anyhow!(
+                            "Invalid hash length: expected 32 bytes, got {} bytes. Repo hash may be corrupted.",
+                            decoded_hash.len()
+                        ));
+                    }
+                    let mut hash_raw: [u8; 32] = [0; 32];
+                    hash_raw.copy_from_slice(&decoded_hash);
+
+                    // Now create the Hash object
+                    let hash = Hash::from_bytes(hash_raw);
+
+                    info!("Successfully retrieved hash from DHT: {}", hash.to_hex());
+                    return Ok(hash);
+                }
+                None => {
+                    retry_count += 1;
+                    if retry_count >= max_retries {
+                        info!(
+                            "DHT value not found for repo {} after {} retries",
+                            repo_id, max_retries
+                        );
+                        return Err(anyhow!(
+                            "Unable to get DHT value for repo root hash after {} retries. \
+                             Repo may be empty or hash not yet published to DHT.",
+                            max_retries
+                        ));
+                    }
+
+                    info!(
+                        "DHT value not found, retry {}/{} in {}ms",
+                        retry_count, max_retries, backoff_ms
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
+                    backoff_ms *= 2; // Exponential backoff
+                }
+            }
         }
-        let mut hash_raw: [u8; 32] = [0; 32];
-        hash_raw.copy_from_slice(&decoded_hash);
-
-        // Now create the Hash object
-        let hash = Hash::from_bytes(hash_raw);
-
-        Ok(hash)
     }
 
     pub async fn update_collection_on_dht(&self) -> Result<()> {
@@ -180,45 +246,77 @@ impl Repo {
     async fn get_or_create_collection(&self) -> Result<Hash> {
         if !self.can_write() {
             // Try to get the collection hash from the DHT (remote or unwritable repos)
-            if let Ok(collection_hash) = self.get_hash_from_dht().await {
-                // The collection hash is found, return it directly (no need for a name)
-                println!("Collection hash found in DHT: {collection_hash:?}");
-                return Ok(collection_hash);
-            } else {
-                // Error if we're trying to create a collection in a read-only repo
-                return Err(anyhow::Error::msg(
-                    "Collection not found and cannot create in read-only repo",
-                ));
+            match self.get_hash_from_dht().await {
+                Ok(collection_hash) => {
+                    // The collection hash is found, return it directly (no need for a name)
+                    info!("Collection hash found in DHT: {}", collection_hash.to_hex());
+                    return Ok(collection_hash);
+                }
+                Err(e) => {
+                    // Log the error but provide more context
+                    warn!(
+                        "Collection hash not found in DHT for read-only repo {}: {}. This may be normal for empty repos.",
+                        self.id().encode_hex::<String>(),
+                        e
+                    );
+                    // Error if we're trying to create a collection in a read-only repo
+                    return Err(anyhow::Error::msg(format!(
+                        "Collection not found and cannot create in read-only repo. Error: {}",
+                        e
+                    )));
+                }
             }
         }
         // If the repo is writable, check if the collection exists
-        let collection_name = self.get_name().await?;
-        if let Ok(collection_hash) = self.iroh_blobs.collection_hash(&collection_name).await {
-            // Collection exists, return the hash
-            println!("Collection hash found in store: {collection_hash:?}");
-            Ok(collection_hash)
-        } else {
-            // Create a new collection
-            println!("Creating new collection...");
-            let new_hash = match self.iroh_blobs.create_collection(&collection_name).await {
-                Ok(hash) => {
-                    println!("New collection created with hash: {hash:?}");
-                    hash
-                }
-                Err(e) => {
-                    eprintln!("Failed to create collection: {e:?}");
-                    return Err(e);
-                }
-            };
+        // Use repo ID as namespace to guarantee uniqueness across groups
+        let repo_id = self.id().encode_hex::<String>();
+        let collection_name = format!("repo_{}", repo_id);
 
-            // Update the DHT with the new collection hash
-            if let Err(e) = self.update_collection_on_dht().await {
-                eprintln!("Failed to update DHT: {e:?}");
-                return Err(e);
+        // Try new naming scheme first
+        match self.iroh_blobs.collection_hash(&collection_name).await {
+            Ok(collection_hash) => {
+                // Collection exists with new naming, return the hash
+                info!("Collection found for {}: {}", collection_name, collection_hash.to_hex());
+                return Ok(collection_hash);
             }
+            Err(_) => {
+                // Migration: check if old name exists
+                let legacy_name = self.get_name().await.ok();
+                if let Some(old_name) = legacy_name {
+                    if let Ok(old_hash) = self.iroh_blobs.collection_hash(&old_name).await {
+                        info!("Migrating collection from '{}' to '{}'", old_name, collection_name);
+                        // Note: Can't rename in Iroh, but we use the old hash
+                        // Just update DHT with the existing hash
+                        if let Err(e) = self.update_hash_on_dht(&old_hash).await {
+                            warn!("Failed to update hash on DHT during migration: {}", e);
+                        }
+                        return Ok(old_hash);
+                    }
+                }
 
-            // Return the new collection hash
-            Ok(new_hash)
+                // Create new collection with namespaced name
+                info!("Creating new collection for repo {} with name {}", repo_id, collection_name);
+                let new_hash = match self.iroh_blobs.create_collection(&collection_name).await {
+                    Ok(hash) => {
+                        info!("New collection created with hash: {}", hash.to_hex());
+                        hash
+                    }
+                    Err(e) => {
+                        error!("Failed to create collection: {e:?}");
+                        return Err(anyhow!("Failed to create collection for repo {}: {}", repo_id, e));
+                    }
+                };
+
+                // Update the DHT with the new collection hash
+                if let Err(e) = self.update_collection_on_dht().await {
+                    error!("Failed to update DHT with new collection hash: {e:?}");
+                    return Err(anyhow!("Failed to update DHT with collection hash for repo {}: {}", repo_id, e));
+                }
+
+                info!("DHT updated with new collection hash: {}", new_hash.to_hex());
+                // Return the new collection hash
+                Ok(new_hash)
+            }
         }
     }
 
@@ -291,8 +389,75 @@ impl Repo {
         self.iroh_blobs.collection_hash(&collection_name).await
     }
 
+    /// Encrypt file data with group's encryption key
+    /// Format: [MAGIC(4)] [VERSION(1)] [NONCE(24)] [ENCRYPTED_DATA]
+    fn encrypt_file_data(&self, data: &[u8]) -> Result<Vec<u8>> {
+        const MAGIC: &[u8; 4] = b"SAVE"; // Magic bytes to identify encrypted files
+        const VERSION: u8 = 0x01; // Encryption version
+
+        let veilid = self.get_veilid_api();
+        let crypto = veilid.crypto()?;
+        let crypto_system = crypto
+            .get(CRYPTO_KIND_VLD0)
+            .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
+
+        let nonce = crypto_system.random_nonce();
+        let encrypted_chunk = crypto_system
+            .encrypt_aead(data, &nonce, &self.get_encryption_key(), None)
+            .map_err(|e| anyhow!("Failed to encrypt file data: {}", e))?;
+
+        // Build encrypted file: MAGIC + VERSION + NONCE + ENCRYPTED_DATA
+        let mut buffer = Vec::with_capacity(4 + 1 + nonce.bytes.len() + encrypted_chunk.len());
+        buffer.extend_from_slice(MAGIC);
+        buffer.push(VERSION);
+        buffer.extend_from_slice(&nonce.bytes);
+        buffer.extend_from_slice(&encrypted_chunk);
+
+        Ok(buffer)
+    }
+
+    /// Decrypt file data, auto-detecting encrypted vs plaintext
+    /// Returns (decrypted_data, was_encrypted)
+    pub fn decrypt_file_data(&self, data: &[u8]) -> Result<(Vec<u8>, bool)> {
+        const MAGIC: &[u8; 4] = b"SAVE";
+
+        // Check if file is encrypted (has magic bytes)
+        if data.len() > 29 && &data[0..4] == MAGIC {
+            let version = data[4];
+            if version != 0x01 {
+                return Err(anyhow!("Unsupported encryption version: {}", version));
+            }
+
+            let nonce_bytes: [u8; 24] = data[5..29]
+                .try_into()
+                .map_err(|_| anyhow!("Failed to extract nonce"))?;
+            let nonce = Nonce::new(nonce_bytes);
+            let encrypted_data = &data[29..];
+
+            let veilid = self.get_veilid_api();
+            let crypto = veilid.crypto()?;
+            let crypto_system = crypto
+                .get(CRYPTO_KIND_VLD0)
+                .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
+
+            let decrypted = crypto_system
+                .decrypt_aead(encrypted_data, &nonce, &self.get_encryption_key(), None)
+                .map_err(|e| anyhow!("Failed to decrypt file data: {}", e))?;
+
+            Ok((decrypted, true))
+        } else {
+            // File is not encrypted (legacy/migration case)
+            warn!("File not encrypted, returning plaintext data");
+            Ok((data.to_vec(), false))
+        }
+    }
+
     pub async fn upload(&self, file_name: &str, data_to_upload: Vec<u8>) -> Result<Hash> {
         self.check_write_permissions()?;
+
+        // Encrypt file data before uploading
+        let encrypted_data = self.encrypt_file_data(&data_to_upload)?;
+        info!("File encrypted: {} bytes → {} bytes", data_to_upload.len(), encrypted_data.len());
 
         // Ensure the collection exists before uploading
         let collection_hash = self.get_or_create_collection().await?;
@@ -300,7 +465,7 @@ impl Repo {
         // Use the repo name
         let collection_name = self.get_name().await?;
         let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
-        tx.send(Ok(Bytes::from(data_to_upload.clone())))
+        tx.send(Ok(Bytes::from(encrypted_data)))
             .await
             .unwrap();
         drop(tx);

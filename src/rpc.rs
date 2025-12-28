@@ -19,7 +19,7 @@ use std::convert::TryInto;
 use std::sync::Arc;
 use std::vec;
 use tokio::sync::broadcast::error::RecvError;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use url::Url;
 use veilid_core::{
     PublicKey, SecretKey, RecordKey, CryptoSystem, DHTRecordDescriptor,
@@ -645,29 +645,77 @@ async fn download(group: &Group, hash: &Hash) -> Result<()> {
         return Err(anyhow!("Cannot download hash. No repos found"));
     }
 
-    for repo_key in repo_keys.iter() {
-        let repo = group.get_repo(repo_key).await?;
-        if let Ok(route_id_blob) = repo.get_route_id_blob().await {
-            println!(
-                "Downloading {} from {} via {:?}",
-                hash,
-                repo.id(),
-                route_id_blob
-            );
-            // Attempt to download the file from the peer
-            let result = group
-                .iroh_blobs
-                .download_file_from(route_id_blob, hash)
-                .await;
-            if result.is_ok() {
-                return Ok(());
+    // Retry configuration
+    const MAX_RETRIES: u32 = 3;
+    const INITIAL_DELAY_MS: u64 = 500;
+    const MAX_DELAY_MS: u64 = 2000;
+
+    for attempt in 0..MAX_RETRIES {
+        for repo_key in repo_keys.iter() {
+            let repo = match group.get_repo(repo_key).await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("Failed to get repo {}: {}", repo_key.encode_hex::<String>(), e);
+                    continue;
+                }
+            };
+            
+            if let Ok(route_id_blob) = repo.get_route_id_blob().await {
+                info!(
+                    "Attempt {}: Downloading {} from {} via route",
+                    attempt + 1,
+                    hash.to_hex(),
+                    repo.id().encode_hex::<String>()
+                );
+                // Attempt to download the file from the peer
+                let result = group
+                    .iroh_blobs
+                    .download_file_from(route_id_blob, hash)
+                    .await;
+                if result.is_ok() {
+                    info!(
+                        "Successfully downloaded hash {} from peer {}",
+                        hash.to_hex(),
+                        repo.id().encode_hex::<String>()
+                    );
+                    return Ok(());
+                } else {
+                    warn!(
+                        "Unable to download from peer {}: {}",
+                        repo.id().encode_hex::<String>(),
+                        result.unwrap_err()
+                    );
+                }
             } else {
-                eprintln!("Unable to download from peer, {}", result.unwrap_err());
+                warn!(
+                    "Unable to get route ID blob for repo {}",
+                    repo_key.encode_hex::<String>()
+                );
             }
+        }
+
+        // If we've exhausted all repos and there are retries left, wait before retrying
+        if attempt < MAX_RETRIES - 1 {
+            let delay_ms = std::cmp::min(
+                INITIAL_DELAY_MS * (1 << attempt), // Exponential backoff
+                MAX_DELAY_MS
+            );
+            info!(
+                "All repos failed for hash {}, retrying in {}ms (attempt {}/{})",
+                hash.to_hex(),
+                delay_ms,
+                attempt + 2,
+                MAX_RETRIES
+            );
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
         }
     }
 
-    Err(anyhow!("Unable to download from any peer"))
+    Err(anyhow!(
+        "Unable to download hash {} from any peer after {} attempts",
+        hash.to_hex(),
+        MAX_RETRIES
+    ))
 }
 
 impl DHTEntity for RpcServiceDescriptor {

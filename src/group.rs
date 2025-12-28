@@ -13,6 +13,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::{error, info, warn};
 
 use std::path::PathBuf;
 use std::result;
@@ -129,22 +130,77 @@ impl Group {
             return Err(anyhow!("Cannot download hash. No other peers found"));
         }
 
-        for repo in repos.iter() {
-            if let Ok(route_id_blob) = repo.get_route_id_blob().await {
-                // It's faster to try and fail, than to ask then try
-                let result = self
-                    .iroh_blobs
-                    .download_file_from(route_id_blob, hash)
-                    .await;
-                if result.is_ok() {
-                    return Ok(());
+        // Retry configuration
+        const MAX_RETRIES: u32 = 3;
+        const INITIAL_DELAY_MS: u64 = 500;
+        const MAX_DELAY_MS: u64 = 2000;
+
+        for attempt in 0..MAX_RETRIES {
+            for repo in repos.iter() {
+                info!(
+                    "Attempt {}: Trying to download hash {} from peer {}",
+                    attempt + 1,
+                    hash.to_hex(),
+                    repo.id().encode_hex::<String>()
+                );
+                
+                if let Ok(route_id_blob) = repo.get_route_id_blob().await {
+                    // It's faster to try and fail, than to ask then try
+                    let result = self
+                        .iroh_blobs
+                        .download_file_from(route_id_blob, hash)
+                        .await;
+                    
+                    if result.is_ok() {
+                        info!("Successfully downloaded hash {} from peer {}", 
+                            hash.to_hex(),
+                            repo.id().encode_hex::<String>()
+                        );
+                        return Ok(());
+                    } else {
+                        warn!(
+                            "Unable to download from peer {}: {}",
+                            repo.id().encode_hex::<String>(),
+                            result.unwrap_err()
+                        );
+                    }
                 } else {
-                    eprintln!("Unable to download from peer, {}", result.unwrap_err());
+                    warn!(
+                        "Unable to get route ID blob for peer {}",
+                        repo.id().encode_hex::<String>()
+                    );
+                }
+            }
+
+            // If we've exhausted all peers and there are retries left, wait before retrying
+            if attempt < MAX_RETRIES - 1 {
+                let delay_ms = std::cmp::min(
+                    INITIAL_DELAY_MS * (1 << attempt), // Exponential backoff
+                    MAX_DELAY_MS
+                );
+                info!(
+                    "All peers failed for hash {}, retrying in {}ms (attempt {}/{})",
+                    hash.to_hex(),
+                    delay_ms,
+                    attempt + 2,
+                    MAX_RETRIES
+                );
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                
+                // Refresh peer list in case new peers joined
+                let mut refreshed_repos = self.list_peer_repos().await;
+                if !refreshed_repos.is_empty() {
+                    refreshed_repos.shuffle(&mut rng);
+                    repos = refreshed_repos;
                 }
             }
         }
 
-        Err(anyhow!("Unable to download from any peer"))
+        Err(anyhow!(
+            "Unable to download hash {} from any peer after {} attempts",
+            hash.to_hex(),
+            MAX_RETRIES
+        ))
     }
 
     pub async fn peers_have_hash(&self, hash: &Hash) -> Result<bool> {
@@ -483,6 +539,16 @@ impl Group {
         self.add_repo(repo).await?;
 
         self.advertise_own_repo().await?;
+
+        // Ensure hash is published to DHT immediately for read-only members
+        if let Some(owned_repo) = self.get_own_repo().await {
+            // update_collection_on_dht will create the collection if it doesn't exist
+            // and publish its hash to the DHT
+            if let Err(e) = owned_repo.update_collection_on_dht().await {
+                warn!("Failed to update hash on DHT immediately: {}", e);
+                // Don't fail repo creation, but log the warning
+            }
+        }
 
         self.get_own_repo()
             .await
