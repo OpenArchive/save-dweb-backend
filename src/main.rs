@@ -131,7 +131,7 @@ async fn main() -> anyhow::Result<()> {
             let rpc_service = RpcService::from_backend(&backend).await?;
             println!(
                 "RPC service started at URL: {}",
-                rpc_service.get_descriptor_url()
+                rpc_service.get_descriptor_url()?
             );
             rpc_service.start_update_listener().await?;
         }

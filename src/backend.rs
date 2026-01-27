@@ -1,39 +1,29 @@
-use crate::backend;
 use crate::common::{init_veilid, make_route, CommonKeypair, DHTEntity};
 use crate::constants::KNOWN_GROUP_LIST;
-use crate::group::{self, Group, URL_DHT_KEY, URL_ENCRYPTION_KEY, URL_PUBLIC_KEY, URL_SECRET_KEY};
+use crate::group::{Group, URL_DHT_KEY, URL_ENCRYPTION_KEY, URL_PUBLIC_KEY, URL_SECRET_KEY};
 use crate::repo::Repo;
 use anyhow::{anyhow, Result};
-use clap::builder::Str;
-use hex::ToHex;
 use iroh::node::Node;
 use iroh_blobs::format::collection::Collection;
 use iroh_blobs::util::SetTagOption;
 use iroh_blobs::Hash;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::mem;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::Mutex;
-use tokio::sync::{
-    broadcast,
-    mpsc::{self, Receiver},
-    oneshot,
-};
-use tracing::info;
+use tokio::sync::broadcast;
+use tracing::{error, info, warn};
 use url::Url;
 use veilid_core::{
-    api_startup_config, PublicKey, SecretKey, RecordKey, CryptoSystem,
-    CryptoTyped, DHTSchema, KeyPair, ProtectedStore, RoutingContext, SharedSecret, TypedRecordKey,
-    UpdateCallback, VeilidAPI, VeilidConfig, VeilidConfigProtectedStore, VeilidUpdate,
-    CRYPTO_KEY_LENGTH, CRYPTO_KIND_VLD0,
+    PublicKey, SecretKey, RecordKey, BareRecordKey, CryptoSystem,
+    DHTSchema, KeyPair, ProtectedStore, RoutingContext, SharedSecret,
+    UpdateCallback, VeilidAPI, VeilidAPIError, VeilidConfig, VeilidConfigProtectedStore, VeilidUpdate,
+    CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 use veilid_iroh_blobs::tunnels::{OnNewRouteCallback, OnRouteDisconnectedCallback};
-use xdg::BaseDirectories;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct KnownGroupList {
@@ -44,25 +34,31 @@ pub struct BackendInner {
     path: PathBuf,
     veilid_api: Option<VeilidAPI>,
     update_rx: Option<broadcast::Receiver<VeilidUpdate>>,
-    groups: HashMap<RecordKey, Box<Group>>,
+    groups: HashMap<String, Box<Group>>,  // Key is hex-encoded opaque value for stable lookups
     pub iroh_blobs: Option<VeilidIrohBlobs>,
     on_new_route_callback: Option<OnNewRouteCallback>,
     initialized: bool,
 }
 
+/// Convert RecordKey to stable cache key (hex-encoded opaque bytes)
+fn group_cache_key(record_key: &RecordKey) -> String {
+    hex::encode(record_key.opaque().ref_value())
+}
+
 impl BackendInner {
     async fn save_known_group_ids(&self) -> Result<()> {
-        let groups = self.groups.clone().into_keys().collect();
+        // Collect the actual RecordKeys from the groups (using group.id())
+        let groups: Vec<RecordKey> = self.groups.values().map(|g| g.id()).collect();
 
         let info = KnownGroupList { groups };
 
-        println!("Saving group IDs {info:?}");
+        info!("Saving group IDs {info:?}");
         let data =
-            serde_cbor::to_vec(&info).map_err(|e| anyhow!("Failed to serialize keypair: {}", e))?;
+            serde_cbor::to_vec(&info).map_err(|e| anyhow!("Failed to serialize keypair: {e}"))?;
         self.veilid()?
             .protected_store()?
             .save_user_secret(KNOWN_GROUP_LIST, &data)
-            .map_err(|e| anyhow!("Unable to store known group IDs: {}", e))?;
+            .map_err(|e: VeilidAPIError| anyhow!("Unable to store known group IDs: {e}"))?;
         Ok(())
     }
 
@@ -138,7 +134,7 @@ impl Backend {
 
         let on_new_route_callback: OnNewRouteCallback = Arc::new(move |route_id, route_id_blob| {
             let inner = inner_clone.clone();
-            println!("Re-generating route");
+            info!("Re-generating route");
             tokio::spawn(async move {
                 let inner = inner.lock().await;
 
@@ -149,12 +145,9 @@ impl Backend {
                 for group in inner.groups.clone().into_values() {
                     if let Some(repo) = group.get_own_repo().await {
                         if let Err(err) = repo.update_route_on_dht().await {
-                            eprintln!(
-                                "Unable to update route after rebuild in group {} in repo {}: {}",
-                                group.id(),
-                                repo.id(),
-                                err
-                            );
+                            let group_id = group.id();
+                            let repo_id = repo.id();
+                            error!("Unable to update route after rebuild in group {group_id:?} in repo {repo_id:?}: {err}");
                         }
                     }
                 }
@@ -162,7 +155,7 @@ impl Backend {
         });
 
         let on_disconnected_callback: OnRouteDisconnectedCallback = Arc::new(move || {
-            println!("Route died");
+            warn!("Route died");
         });
 
         let (route_id, route_id_blob) = make_route(&veilid_api).await?;
@@ -191,17 +184,34 @@ impl Backend {
     }
 
     pub async fn start(&self) -> Result<()> {
+        self.start_with_namespace(None).await
+    }
+
+    pub async fn start_with_namespace(&self, namespace: Option<String>) -> Result<()> {
         let mut inner = self.inner.lock().await;
 
         if inner.veilid_api.is_some() {
-            return Err(anyhow!("Veilid already initialized"));
+            #[cfg(test)]
+            {
+                // In tests, allow stop-then-restart when already initialized (process may not fully restart).
+                drop(inner);
+                self.stop().await?;
+                inner = self.inner.lock().await;
+                info!("Re-initializing Veilid for testing purposes.");
+            }
+            #[cfg(not(test))]
+            {
+                drop(inner);
+                return Err(anyhow!("Veilid already initialized. Call stop() first, then start()."));
+            }
         }
-        println!("Starting on {}", inner.path.display());
+        info!("Starting on {}", inner.path.display());
 
         let base_dir = inner.path.clone();
         fs::create_dir_all(&base_dir).await?;
 
-        let (veilid_api, mut update_rx) = init_veilid(&base_dir, "openarchive".to_string()).await?;
+        let namespace_str = namespace.unwrap_or_else(|| "openarchive".to_string());
+        let (veilid_api, mut update_rx) = init_veilid(&base_dir, namespace_str).await?;
 
         inner.veilid_api = Some(veilid_api.clone());
         inner.update_rx = Some(update_rx.resubscribe());
@@ -219,7 +229,7 @@ impl Backend {
 
         let on_new_route_callback: OnNewRouteCallback = Arc::new(move |route_id, route_id_blob| {
             let inner = inner_clone.clone();
-            println!("Re-generating route");
+            info!("Re-generating route");
             tokio::spawn(async move {
                 let inner = inner.lock().await;
 
@@ -230,12 +240,9 @@ impl Backend {
                 for group in inner.groups.clone().into_values() {
                     if let Some(repo) = group.get_own_repo().await {
                         if let Err(err) = repo.update_route_on_dht().await {
-                            eprintln!(
-                                "Unable to update route after rebuild in group {} in repo {}: {}",
-                                group.id(),
-                                repo.id(),
-                                err
-                            );
+                            let group_id = group.id();
+                            let repo_id = repo.id();
+                            error!("Unable to update route after rebuild in group {group_id:?} in repo {repo_id:?}: {err}");
                         }
                     }
                 }
@@ -259,8 +266,8 @@ impl Backend {
 
         drop(inner);
 
-        if let Err(err) = self.load_known_groups().await {
-            eprintln!("No known groups on start");
+        if let Err(e) = self.load_known_groups().await {
+            warn!("No known groups on start: {e}");
         }
 
         Ok(())
@@ -268,17 +275,17 @@ impl Backend {
 
     pub async fn stop(&self) -> Result<()> {
         let mut inner = self.inner.lock().await;
-        println!("Stopping Backend...");
+        info!("Stopping Backend...");
         if let Some(iroh_blobs) = inner.iroh_blobs.take() {
-            println!("Shutting down Veilid Iroh Blobs");
+            info!("Shutting down Veilid Iroh Blobs");
             iroh_blobs.shutdown().await?;
-            println!("Veilid Iroh Blobs shut down successfully");
+            info!("Veilid Iroh Blobs shut down successfully");
         }
         if inner.veilid_api.is_some() {
-            println!("Shutting down Veilid API");
+            info!("Shutting down Veilid API");
             let veilid = inner.veilid_api.take();
             veilid.unwrap().shutdown().await;
-            println!("Veilid API shut down successfully");
+            info!("Veilid API shut down successfully");
             inner.groups = HashMap::new();
         }
         inner.initialized = false;
@@ -316,6 +323,15 @@ impl Backend {
             ));
         }
         
+        // Check if group is already cached with a writable repo
+        let cache_key = group_cache_key(&keys.id);
+        if let Some(cached_group) = inner.groups.get(&cache_key) {
+            if cached_group.get_own_repo().await.is_some() {
+                info!("Group already cached with writable repo, returning cached group");
+                return Ok(cached_group.clone());
+            }
+        }
+        
         info!("Joining group - backend is initialized");
         let iroh_blobs = inner.iroh_blobs()?;
         let veilid = inner.veilid()?;
@@ -326,23 +342,17 @@ impl Backend {
             .get(CRYPTO_KIND_VLD0)
             .ok_or_else(|| anyhow!("Unable to init crypto system"));
 
-        let record_key = TypedRecordKey::new(CRYPTO_KIND_VLD0, keys.id);
-        // First open the DHT record
-        let dht_record = routing_context
-            .open_dht_record(record_key.clone(), None) // Don't pass a writer here yet
-            .await?;
-
-        // Use the owner key from the DHT record as the default writer
-        let owner_key = dht_record.owner(); // Call the owner() method to get the owner key
-
-        // Reopen the DHT record with the owner key as the writer
+        let record_key = keys.id;
+        // In v0.5.1, DHT encryption is enabled by default, so we need to provide the owner keypair
+        // to decrypt. We get this from the URL that was shared with us.
+        let bare_keypair = veilid_core::BareKeyPair::new(
+            keys.public_key.clone().into_value(),
+            keys.secret_key.clone().unwrap().into_value(),
+        );
         let dht_record = routing_context
             .open_dht_record(
                 record_key.clone(),
-                Some(KeyPair::new(
-                    owner_key.clone(),
-                    keys.secret_key.clone().unwrap(),
-                )),
+                Some(KeyPair::new(CRYPTO_KIND_VLD0, bare_keypair)),
             )
             .await?;
 
@@ -354,10 +364,26 @@ impl Backend {
             iroh_blobs.clone(),
         );
 
+        // Try to load existing repo from disk
         group.try_load_repo_from_disk().await;
+        
+        // Load repos from other peers in the group
         group.load_repos_from_dht().await?;
+        
+        // If we don't have our own repo, create one automatically
+        // This allows the device to participate in the group and upload files
+        // Check for a writable repo after BOTH disk and DHT loading complete
+        if group.get_own_repo().await.is_none() {
+            info!("No own repo found when joining group, creating one automatically");
+            if let Err(e) = group.create_repo().await {
+                warn!("Failed to auto-create repo when joining group: {e}");
+                // Continue anyway - user can create repo manually later
+            } else {
+                info!("Successfully auto-created repo when joining group");
+            }
+        }
 
-        inner.groups.insert(group.id(), Box::new(group.clone()));
+        inner.groups.insert(group_cache_key(&group.id()), Box::new(group.clone()));
 
         inner.save_known_group_ids().await?;
 
@@ -385,11 +411,10 @@ impl Backend {
             .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
 
         let schema = DHTSchema::dflt(65)?; // 64 members + a title
-        let kind = Some(CRYPTO_KIND_VLD0);
         let owner_keypair = crypto_system.generate_keypair();
 
         let dht_record = routing_context
-            .create_dht_record(schema, Some(owner_keypair), kind)
+            .create_dht_record(CRYPTO_KIND_VLD0, schema, Some(owner_keypair))
             .await?;
 
         let encryption_key = crypto_system.random_shared_secret();
@@ -413,7 +438,7 @@ impl Backend {
         .await
         .map_err(|e| anyhow!(e))?;
 
-        inner.groups.insert(group.id(), Box::new(group.clone()));
+        inner.groups.insert(group_cache_key(&group.id()), Box::new(group.clone()));
 
         inner.save_known_group_ids().await?;
 
@@ -421,10 +446,17 @@ impl Backend {
     }
 
     pub async fn get_group(&self, record_key: &RecordKey) -> Result<Box<Group>> {
-        let mut inner = self.inner.lock().await;
-        if let Some(group) = inner.groups.get(record_key) {
-            return Ok(group.clone());
+        let cache_key = group_cache_key(record_key);
+        let cached_group = {
+            let inner = self.inner.lock().await;
+            inner.groups.get(&cache_key).cloned()
+        };
+
+        if let Some(group) = cached_group {
+            return Ok(group);
         }
+
+        let mut inner = self.inner.lock().await;
         
         // Check initialization state before proceeding
         if !inner.is_initialized() {
@@ -452,9 +484,15 @@ impl Backend {
         // Use the owner key from the DHT record as the default writer
         let owner_key = retrieved_keypair.public_key; // Call the owner() method to get the owner key
         let owner_secret = retrieved_keypair.secret_key;
-        let record_key = TypedRecordKey::new(CRYPTO_KIND_VLD0, *record_key);
+        let record_key = record_key.clone();
 
-        let owner = owner_secret.map(|secret| KeyPair::new(owner_key, secret));
+        let owner = owner_secret.map(|secret| {
+            let bare_keypair = veilid_core::BareKeyPair::new(
+                owner_key.into_value(),
+                secret.into_value(),
+            );
+            KeyPair::new(CRYPTO_KIND_VLD0, bare_keypair)
+        });
 
         // Reopen the DHT record with the owner key as the writer
         let dht_record = routing_context
@@ -472,7 +510,7 @@ impl Backend {
         group.try_load_repo_from_disk().await;
         group.load_repos_from_dht().await?;
 
-        inner.groups.insert(group.id(), Box::new(group.clone()));
+        inner.groups.insert(group_cache_key(&group.id()), Box::new(group.clone()));
 
         drop(inner);
 
@@ -497,16 +535,23 @@ impl Backend {
         let data = veilid
             .protected_store()?
             .load_user_secret(KNOWN_GROUP_LIST)
-            .map_err(|_| anyhow!("Failed to load keypair"))?
-            .ok_or_else(|| anyhow!("Keypair not found"))?;
-        let info: KnownGroupList =
-            serde_cbor::from_slice(&data).map_err(|_| anyhow!("Failed to deserialize keypair"))?;
-        Ok(info.groups)
+            .map_err(|e: VeilidAPIError| anyhow!("Failed to load known groups: {e}"))?
+            .ok_or_else(|| anyhow!("Known group list not found"))?;
+        match serde_cbor::from_slice::<KnownGroupList>(&data) {
+            Ok(info) => Ok(info.groups),
+            Err(e) => {
+                warn!(
+                    "Failed to deserialize known group list (old format?): {e}; treating as empty"
+                );
+                Ok(Vec::new())
+            }
+        }
     }
 
     pub async fn close_group(&self, key: RecordKey) -> Result<()> {
         let mut inner = self.inner.lock().await;
-        if let Some(group) = inner.groups.remove(&key) {
+        let cache_key = group_cache_key(&key);
+        if let Some(group) = inner.groups.remove(&cache_key) {
             group.close().await.map_err(|e| anyhow!(e))?;
         } else {
             return Err(anyhow!("Group not found"));
@@ -517,8 +562,8 @@ impl Backend {
     /// Invalidate cached group, forcing reload from DHT on next access
     pub async fn invalidate_group_cache(&self, record_key: &RecordKey) {
         let mut inner = self.inner.lock().await;
-        inner.groups.remove(record_key);
-        info!("Invalidated cache for group {}", record_key.encode_hex::<String>());
+        inner.groups.remove(&group_cache_key(record_key));
+        info!("Invalidated cache for group {}", hex::encode(record_key.opaque().ref_value()));
     }
 
     /// Force refresh a group's repos from DHT
@@ -582,18 +627,6 @@ impl Backend {
     }
 }
 
-async fn wait_for_network(update_rx: &mut broadcast::Receiver<VeilidUpdate>) -> Result<()> {
-    while let Ok(update) = update_rx.recv().await {
-        if let VeilidUpdate::Attachment(attachment_state) = update {
-            if attachment_state.public_internet_ready {
-                println!("Public internet ready!");
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
 fn find_query(url: &Url, key: &str) -> Result<String> {
     for (query_key, value) in url.query_pairs() {
         if query_key == key {
@@ -601,15 +634,16 @@ fn find_query(url: &Url, key: &str) -> Result<String> {
         }
     }
 
-    Err(anyhow!("Unable to find parameter {} in URL {:?}", key, url))
+    Err(anyhow!("Unable to find parameter {key} in URL {url:?}"))
 }
 
+/// Decode a record key from a URL query parameter.
+/// Expects the value produced by `RecordKey::ref_value().encode()` (e.g. from `Group::get_url()`).
+/// Round-trip is covered by the `test_join` test.
 pub fn record_key_from_query(url: &Url, key: &str) -> Result<RecordKey> {
     let value = find_query(url, key)?;
-    let bytes = hex::decode(value)?;
-    let mut key_vec: [u8; 32] = [0; 32];
-    key_vec.copy_from_slice(bytes.as_slice());
-    Ok(RecordKey::new(key_vec))
+    let bare = BareRecordKey::try_decode(&value)?;
+    Ok(RecordKey::new(CRYPTO_KIND_VLD0, bare))
 }
 
 pub fn public_key_from_query(url: &Url, key: &str) -> Result<PublicKey> {
@@ -617,7 +651,7 @@ pub fn public_key_from_query(url: &Url, key: &str) -> Result<PublicKey> {
     let bytes = hex::decode(value)?;
     let mut key_vec: [u8; 32] = [0; 32];
     key_vec.copy_from_slice(bytes.as_slice());
-    Ok(PublicKey::new(key_vec))
+    Ok(PublicKey::new(CRYPTO_KIND_VLD0, veilid_core::BarePublicKey::from(&key_vec[..])))
 }
 
 pub fn secret_key_from_query(url: &Url, key: &str) -> Result<SecretKey> {
@@ -625,7 +659,7 @@ pub fn secret_key_from_query(url: &Url, key: &str) -> Result<SecretKey> {
     let bytes = hex::decode(value)?;
     let mut key_vec: [u8; 32] = [0; 32];
     key_vec.copy_from_slice(bytes.as_slice());
-    Ok(SecretKey::new(key_vec))
+    Ok(SecretKey::new(CRYPTO_KIND_VLD0, veilid_core::BareSecretKey::from(&key_vec[..])))
 }
 
 pub fn shared_secret_from_query(url: &Url, key: &str) -> Result<SharedSecret> {
@@ -633,7 +667,7 @@ pub fn shared_secret_from_query(url: &Url, key: &str) -> Result<SharedSecret> {
     let bytes = hex::decode(value)?;
     let mut key_vec: [u8; 32] = [0; 32];
     key_vec.copy_from_slice(bytes.as_slice());
-    Ok(SharedSecret::new(key_vec))
+    Ok(SharedSecret::new(CRYPTO_KIND_VLD0, veilid_core::BareSharedSecret::from(&key_vec[..])))
 }
 
 pub fn parse_url(url_string: &str) -> Result<CommonKeypair> {

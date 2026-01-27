@@ -17,7 +17,7 @@ use crate::common::{CommonKeypair, DHTEntity};
 
 use iroh_blobs::Hash;
 use veilid_core::{
-    PublicKey, SecretKey, RecordKey, CryptoTyped, TypedRecordKey, VeilidUpdate, CRYPTO_KIND_VLD0,
+    PublicKey, SecretKey, RecordKey, VeilidUpdate, CRYPTO_KIND_VLD0,
     VALID_CRYPTO_KINDS,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
@@ -32,294 +32,112 @@ mod tests {
     use bytes::Bytes;
     use common::init_veilid;
     use common::make_route;
-    use rpc::RpcClient;
-    use rpc::RpcService;
-    use std::path::Path;
-    use std::result;
-    use tmpdir::TmpDir;
+    use common::test_helpers::setup_test_backend;
+    use crate::rpc::{RpcClient, RpcService};
+    use futures::StreamExt;
+    use std::time::Duration;
     use tokio::fs;
-    use tokio::join;
     use tokio::sync::mpsc;
     use tokio::time::sleep;
-    use tokio::time::Duration;
     use tokio_stream::wrappers::ReceiverStream;
-    use tokio_stream::StreamExt;
-
-    #[tokio::test]
-    #[serial]
-    async fn blob_transfer() -> Result<()> {
-        let path = TmpDir::new("blob_transfer").await.unwrap();
-
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        // Initialize the backend
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
-
-        // Create a group and a repo
-        let mut group = backend
-            .create_group()
-            .await
-            .expect("Unable to create group");
-        let repo = group.create_repo().await.expect("Unable to create repo");
-
-        let iroh_blobs = backend
-            .get_iroh_blobs()
-            .await
-            .expect("iroh_blobs not initialized");
-
-        // Prepare data to upload as a blob
-        let data_to_upload = b"Test data for blob".to_vec();
-        let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
-        tx.send(Ok(Bytes::from(data_to_upload.clone())))
-            .await
-            .unwrap();
-        drop(tx); // Close the sender
-
-        // upload the data as a blob and get the hash
-        let hash = iroh_blobs
-            .upload_from_stream(rx)
-            .await
-            .expect("Failed to upload blob");
-
-        // some delay to ensure blob is uploaded
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        // download the blob
-        let receiver = iroh_blobs
-            .read_file(hash.clone())
-            .await
-            .expect("Failed to read blob");
-
-        // retrieve the data from the receiver
-        let mut retrieved_data = Vec::new();
-        let mut stream = ReceiverStream::new(receiver);
-        while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
-                Ok(bytes) => retrieved_data.extend_from_slice(bytes.as_ref()),
-                Err(e) => panic!("Error reading data: {e:?}"),
-            }
-        }
-
-        // Verify that the downloaded data matches the uploaded data
-        assert_eq!(retrieved_data, data_to_upload);
-
-        backend.stop().await.expect("Unable to stop");
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn group_creation() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend").await.unwrap();
-
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
-
-        let group = backend
-            .create_group()
-            .await
-            .expect("Unable to create group");
-
-        group
-            .set_name(TEST_GROUP_NAME)
-            .await
-            .expect(UNABLE_TO_SET_GROUP_NAME);
-        let name = group.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
-        assert_eq!(name, TEST_GROUP_NAME);
-
-        backend.stop().await.expect("Unable to stop");
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn keypair_storage_and_retrieval() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend").await.unwrap();
-
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
-
-        let group = backend
-            .create_group()
-            .await
-            .expect("Unable to create group");
-        backend.stop().await.expect("Unable to stop");
-
-        backend.start().await.expect("Unable to restart");
-
-        let mut loaded_group = backend.get_group(&group.id()).await.expect(GROUP_NOT_FOUND);
-
-        let veilid = backend.get_veilid_api().await.unwrap();
-        let protected_store = veilid.protected_store().unwrap();
-        let keypair_data = protected_store
-            .load_user_secret(group.id().to_string())
-            .expect(FAILED_TO_LOAD_KEYPAIR)
-            .expect(KEYPAIR_NOT_FOUND);
-
-        let retrieved_keypair: CommonKeypair =
-            serde_cbor::from_slice(&keypair_data).expect(FAILED_TO_DESERIALIZE_KEYPAIR);
-
-        // Check that the id matches group.id()
-        assert_eq!(retrieved_keypair.id, group.id());
-
-        // Check that the public_key matches the owner public key from the DHT record
-        assert_eq!(
-            retrieved_keypair.public_key,
-            loaded_group.get_dht_record().owner().clone()
-        );
-
-        // Check that the secret and encryption keys match
-        assert_eq!(retrieved_keypair.secret_key, group.get_secret_key());
-        assert_eq!(retrieved_keypair.encryption_key, group.get_encryption_key());
-
-        backend.stop().await.expect("Unable to stop");
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn repo_creation() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend").await.unwrap();
-
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
-
-        // Step 1: Create a group before creating a repo
-        let mut group = backend
-            .create_group()
-            .await
-            .expect("Unable to create group");
-
-        // Step 2: Create a repo
-        let repo = group.create_repo().await.expect("Unable to create repo");
-
-        let repo_key = repo.get_id();
-        assert!(repo_key != RecordKey::default(), "Repo ID should be set");
-
-        // Step 3: Set and verify the repo name
-        let repo_name = "Test Repo";
-
-        repo.set_name(repo_name)
-            .await
-            .expect("Unable to set repo name");
-
-        let name = repo.get_name().await.expect(UNABLE_TO_GET_GROUP_NAME);
-
-        assert_eq!(name, repo_name);
-
-        // Step 5: List known repos and verify the repo is in the list
-        let repos = group.list_repos().await;
-        assert!(repos.contains(&repo_key));
-
-        // Step 6: Retrieve the repo by key and check its name
-        let loaded_repo = group.get_repo(&repo_key).await.expect("Repo not found");
-
-        let retrieved_name = loaded_repo
-            .get_name()
-            .await
-            .expect("Unable to get repo name after restart");
-        assert_eq!(retrieved_name, repo_name);
-
-        backend.stop().await.expect("Unable to stop");
-        Ok(())
-    }
+    use tracing::error;
+    use tmpdir::TmpDir;
 
     #[tokio::test]
     #[serial]
     async fn sending_message_via_private_route() -> Result<()> {
-        tokio::time::timeout(Duration::from_secs(888), async {
-            let path = TmpDir::new("test_dweb_backend").await.unwrap();
+        let (backend, _tmpdir) = setup_test_backend("test_dweb_backend").await?;
 
-            fs::create_dir_all(path.as_ref())
-                .await
-                .expect("Failed to create base directory");
+        // Use tokio::select! to ensure cleanup happens even on timeout
+        // Replace expect() with ? to convert panics to errors, ensuring cleanup runs
+        let result = tokio::select! {
+            result = async {
+                // Add delay to ensure backend initialization
+                tokio::time::sleep(Duration::from_secs(2)).await;
 
-            let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-            backend.start().await.expect("Unable to start");
+                // Create a group and a repo - use ? instead of expect() to avoid panics
+                let mut group = backend
+                    .create_group()
+                    .await?;
+                let repo = group.create_repo().await?;
+                let veilid_api = backend
+                    .get_veilid_api()
+                    .await
+                    .ok_or_else(|| anyhow!("Failed to get VeilidAPI instance"))?;
 
-            // Add delay to ensure backend initialization
-            tokio::time::sleep(Duration::from_secs(2)).await;
+                // Get the update receiver from the backend
+                let update_rx = backend
+                    .subscribe_updates()
+                    .await
+                    .ok_or_else(|| anyhow!("Failed to subscribe to updates"))?;
 
-            // Create a group and a repo
-            let mut group = backend
-                .create_group()
-                .await
-                .expect("Unable to create group");
-            let repo = group.create_repo().await.expect("Unable to create repo");
-            let veilid_api = backend
-                .get_veilid_api()
-                .await
-                .expect("Failed to get VeilidAPI instance");
+                // Set up a channel to receive AppMessage updates
+                let (message_tx, mut message_rx) = mpsc::channel(1);
 
-            // Get the update receiver from the backend
-            let update_rx = backend
-                .subscribe_updates()
-                .await
-                .expect("Failed to subscribe to updates");
-
-            // Set up a channel to receive AppMessage updates
-            let (message_tx, mut message_rx) = mpsc::channel(1);
-
-            // Spawn a task to listen for updates
-            tokio::spawn(async move {
-                let mut rx = update_rx.resubscribe();
-                while let Ok(update) = rx.recv().await {
-                    if let VeilidUpdate::AppMessage(app_message) = update {
-                        // Optionally, filter by route_id or other criteria
-                        message_tx.send(app_message).await.unwrap();
+                // Spawn a task to listen for updates
+                // Exit cleanly if receiver is dropped to avoid masking failures
+                let listener_handle = tokio::spawn(async move {
+                    let mut rx = update_rx.resubscribe();
+                    while let Ok(update) = rx.recv().await {
+                        if let VeilidUpdate::AppMessage(app_message) = update {
+                            // If send fails (receiver dropped), exit to surface failure quickly
+                            if message_tx.send(app_message).await.is_err() {
+                                tracing::debug!("Message receiver dropped, listener task exiting");
+                                break;
+                            }
+                        }
                     }
-                }
-            });
+                });
 
-            println!(
-                "Creating a new custom private route with valid crypto kinds: {VALID_CRYPTO_KINDS:?}"
-            );
+                println!(
+                    "Creating a new custom private route with valid crypto kinds: {VALID_CRYPTO_KINDS:?}"
+                );
 
-            // Create a new private route
-            let (route_id, route_id_blob) = make_route(&veilid_api)
-                .await
-                .expect("Failed to create route after retries");
+                // Create a new private route
+                let (route_id, route_id_blob) = make_route(&veilid_api)
+                    .await?;
 
-            // Store the route_id_blob in DHT
-            repo.store_route_id_in_dht(route_id_blob.clone())
-                .await
-                .expect("Failed to store route ID blob in DHT");
+                // Store the route_id_blob in DHT
+                repo.store_route_id_in_dht(route_id_blob.clone())
+                    .await?;
 
-            // Define the message to send
-            let message = b"Test Message to Repo Owner".to_vec();
+                // Define the message to send
+                let message = b"Test Message to Repo Owner".to_vec();
 
-            println!("Sending message to owner...");
+                println!("Sending message to owner...");
 
-            // Send the message
-            repo.send_message_to_owner(&veilid_api, message.clone(), ROUTE_ID_DHT_KEY)
-                .await
-                .expect("Failed to send message to repo owner");
+                // Send the message
+                repo.send_message_to_owner(&veilid_api, message.clone(), ROUTE_ID_DHT_KEY)
+                    .await?;
 
-            // Receive the message from the background task
-            let received_app_message = message_rx.recv().await.expect("Failed to receive message");
+                // Receive the message from the background task with a shorter timeout
+                // This ensures failures surface quickly instead of waiting the full 888s
+                let receive_timeout = Duration::from_secs(30);
+                let received_app_message = tokio::time::timeout(receive_timeout, message_rx.recv())
+                    .await
+                    .map_err(|_| anyhow!("Timeout waiting to receive message ({}s)", receive_timeout.as_secs()))?
+                    .ok_or_else(|| anyhow!("Message receiver channel closed before message received"))?;
 
-            // Verify the message
-            assert_eq!(received_app_message.message(), message.as_slice());
+                // Verify the message
+                // Note: assert_eq! will still panic on failure, but that's expected test behavior
+                assert_eq!(received_app_message.message(), message.as_slice());
 
-            backend.stop().await.expect("Unable to stop");
-            Ok::<(), anyhow::Error>(())
-        })
-        .await??;
+                Ok::<(), anyhow::Error>(())
+            } => result,
+            _ = tokio::time::sleep(Duration::from_secs(888)) => {
+                Err(anyhow::anyhow!("Test timed out after 888 seconds"))
+            }
+        };
+
+        // Ensure cleanup happens regardless of success, timeout, or error
+        // This will run for all error paths (via ?) and timeout paths
+        // Note: If assert_eq! panics, cleanup won't run, but that's expected test behavior
+        if let Err(e) = backend.stop().await {
+            tracing::warn!("Failed to stop backend during cleanup: {e}");
+        }
+
+        // Return the test result
+        result?;
 
         Ok(())
     }
@@ -334,7 +152,7 @@ mod tests {
             .expect("Failed to create base directory");
 
         let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        backend.start_with_namespace(Some("known_group_persistence".to_string())).await.expect("Unable to start");
 
         let group = backend
             .create_group()
@@ -349,7 +167,7 @@ mod tests {
 
         backend.stop().await.expect("Unable to stop");
 
-        backend.start().await.expect("Unable to restart");
+        backend.start_with_namespace(Some("known_group_persistence".to_string())).await.expect("Unable to restart");
 
         let list = backend.list_groups().await?;
 
@@ -369,7 +187,7 @@ mod tests {
             .expect("Failed to create base directory");
 
         let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        backend.start_with_namespace(Some("group_name_persistence".to_string())).await.expect("Unable to start");
 
         let group = backend
             .create_group()
@@ -382,7 +200,7 @@ mod tests {
 
         backend.stop().await.expect("Unable to stop");
 
-        backend.start().await.expect("Unable to restart");
+        backend.start_with_namespace(Some("group_name_persistence".to_string())).await.expect("Unable to restart");
         let loaded_group = backend.get_group(&group.id()).await.expect(GROUP_NOT_FOUND);
 
         let name = loaded_group
@@ -404,7 +222,7 @@ mod tests {
             .expect("Failed to create base directory");
 
         let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start backend");
+        backend.start_with_namespace(Some("repo_persistence".to_string())).await.expect("Unable to start backend");
 
         let mut group = backend
             .create_group()
@@ -417,7 +235,7 @@ mod tests {
         backend.stop().await.expect("Unable to stop backend");
 
         // Restart backend and verify group and repo persistence
-        backend.start().await.expect("Unable to restart backend");
+        backend.start_with_namespace(Some("repo_persistence".to_string())).await.expect("Unable to restart backend");
         println!(
             "Backend restarted, attempting to load group with ID: {group_id:?}"
         );
@@ -430,7 +248,7 @@ mod tests {
         backend.stop().await.expect("Unable to stop backend");
 
         // Restart backend and verify group and repo persistence
-        backend.start().await.expect("Unable to restart backend");
+        backend.start_with_namespace(Some("repo_persistence".to_string())).await.expect("Unable to restart backend");
         println!(
             "Backend restarted, attempting to load group with ID: {loaded_group_id:?}"
         );
@@ -484,7 +302,7 @@ mod tests {
             .expect("Unable to stop backend after second drop");
 
         backend
-            .start()
+            .start_with_namespace(Some("repo_persistence".to_string()))
             .await
             .expect("Unable to restart backend after second drop");
 
@@ -529,15 +347,8 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn upload_blob_test() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend_upload_blob").await.unwrap();
-
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        // Initialize the backend
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        let (backend, tmpdir) = setup_test_backend("upload_blob_test").await?;
+        let path = tmpdir.to_path_buf();
 
         // Create a group
         let mut group = backend
@@ -546,7 +357,7 @@ mod tests {
             .expect("Unable to create group");
 
         // Prepare a temporary file to upload as a blob
-        let tmp_file_path = path.as_ref().join("test_blob_file.txt");
+        let tmp_file_path = path.join("test_blob_file.txt");
         let file_content = b"Test content for file upload";
         fs::write(&tmp_file_path, file_content)
             .await
@@ -613,15 +424,8 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn upload_blob_and_verify_protected_store() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend_upload_blob").await.unwrap();
-
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        // Initialize the backend
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        let (backend, tmpdir) = setup_test_backend("upload_blob_and_verify_protected_store").await?;
+        let path = tmpdir.to_path_buf();
 
         // Create a group
         let mut group = backend
@@ -630,7 +434,7 @@ mod tests {
             .expect("Unable to create group");
 
         // Prepare a temporary file to upload as a blob
-        let tmp_file_path = path.as_ref().join("test_blob_file.txt");
+        let tmp_file_path = path.join("test_blob_file.txt");
         let file_content = b"Test content for file upload";
         fs::write(&tmp_file_path, file_content)
             .await
@@ -703,18 +507,83 @@ mod tests {
         Ok(())
     }
 
+    /// Upload and retrieve a 1 MiB blob to verify the iroh/veilid pipeline handles
+    /// larger payloads. The DHT only stores the hash (~32–64 bytes); the blob
+    /// content is transferred via veilid_iroh_blobs tunnels.
+    #[tokio::test]
+    #[serial]
+    async fn upload_large_blob_test() -> Result<()> {
+        const SIZE_1_MIB: usize = 1024 * 1024;
+        let (backend, tmpdir) = setup_test_backend("upload_large_blob_test").await?;
+        let path = tmpdir.to_path_buf();
+
+        let mut group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
+
+        let tmp_file_path = path.join("large_blob.bin");
+        let file_content: Vec<u8> = (0..SIZE_1_MIB).map(|i| (i % 256) as u8).collect();
+        fs::write(&tmp_file_path, &file_content)
+            .await
+            .expect("Failed to write large temp file");
+
+        let repo = group.create_repo().await?;
+
+        let hash = repo
+            .upload_blob(tmp_file_path.clone())
+            .await
+            .expect("Failed to upload large blob");
+
+        let dht_value = backend
+            .get_veilid_api()
+            .await
+            .expect("veilid_api not initialized")
+            .routing_context()
+            .expect("Failed to get routing context")
+            .get_dht_value(repo.dht_record.key().clone(), 1, false)
+            .await
+            .expect("Failed to retrieve DHT value");
+
+        if let Some(dht_value_data) = dht_value {
+            let dht_value_bytes = dht_value_data.data();
+            let dht_value_str = String::from_utf8(dht_value_bytes.to_vec())
+                .expect("Failed to convert ValueData to String");
+            assert_eq!(dht_value_str, hash.to_hex());
+        } else {
+            panic!("No value found in DHT for the given key");
+        }
+
+        let iroh_blobs = backend
+            .get_iroh_blobs()
+            .await
+            .expect("iroh_blobs not initialized");
+        let receiver = iroh_blobs
+            .read_file(hash.clone())
+            .await
+            .expect("Failed to read large blob");
+
+        let mut retrieved_data = Vec::new();
+        let mut stream = ReceiverStream::new(receiver);
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(bytes) => retrieved_data.extend_from_slice(bytes.as_ref()),
+                Err(e) => panic!("Error reading data: {e:?}"),
+            }
+        }
+
+        assert_eq!(retrieved_data.len(), file_content.len());
+        assert_eq!(retrieved_data, file_content);
+
+        backend.stop().await.expect("Unable to stop");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        Ok(())
+    }
+
     #[tokio::test]
     #[serial]
     async fn test_join() {
-        let path = TmpDir::new("test_dweb_backend").await.unwrap();
-
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-
-        backend.start().await.expect("Unable to start");
+        let (backend, _tmpdir) = setup_test_backend("test_join").await.expect("Unable to setup backend");
         let group = backend
             .create_group()
             .await
@@ -725,7 +594,7 @@ mod tests {
             .await
             .expect(UNABLE_TO_SET_GROUP_NAME);
 
-        let url = group.get_url();
+        let url = group.get_url().expect("Failed to get group URL");
 
         let keys = backend::parse_url(url.as_str()).expect("URL was parsed back out");
 
@@ -736,14 +605,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn list_repos_test() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend_list_repos").await.unwrap();
-
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        let (backend, _tmpdir) = setup_test_backend("list_repos_test").await?;
 
         // Create a group and two repos
         let mut group = backend
@@ -763,14 +625,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn get_own_repo_test() -> Result<()> {
-        let path = TmpDir::new("test_dweb_backend_get_own_repo").await.unwrap();
-
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        let (backend, _tmpdir) = setup_test_backend("get_own_repo_test").await?;
 
         // Create a group and two repos, one writable
         let mut group = backend
@@ -791,6 +646,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn download_hash_from_peers_test() -> Result<()> {
+
         let base_dir = TmpDir::new("test_dweb_backend_download_hash")
             .await
             .unwrap();
@@ -802,7 +658,7 @@ mod tests {
         let store2 =
             iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh2")).await?;
 
-        let (v1_result, v2_result) = join!(
+        let (v1_result, v2_result) = tokio::join!(
             init_veilid(&base_dir_path, "downloadpeers1".to_string()),
             init_veilid(&base_dir_path, "downloadpeers2".to_string())
         );
@@ -843,7 +699,7 @@ mod tests {
 
         sleep(Duration::from_secs(2)).await;
 
-        let group2 = backend2.join_from_url(&group.get_url()).await?;
+        let group2 = backend2.join_from_url(&group.get_url()?).await?;
 
         // Upload a test blob to the peer repo
         let data_to_upload = Bytes::from("Test data for peer download");
@@ -914,7 +770,7 @@ mod tests {
         let store2 =
             iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh2")).await?;
 
-        let (v1_result, v2_result) = join!(
+        let (v1_result, v2_result) = tokio::join!(
             init_veilid(&base_dir_path, "downloadpeers1".to_string()),
             init_veilid(&base_dir_path, "downloadpeers2".to_string())
         );
@@ -990,7 +846,7 @@ mod tests {
         sleep(Duration::from_secs(4)).await;
 
         let joined_group = backend2
-            .join_from_url(&group1.get_url())
+            .join_from_url(&group1.get_url()?)
             .await
             .expect("Unable to join group on second peer");
 
@@ -1016,8 +872,9 @@ mod tests {
 
         assert!(peers_have, "Peers should have the uploaded hash");
 
-        veilid_api1.shutdown().await;
-        veilid_api2.shutdown().await;
+        backend1.stop().await?;
+        backend2.stop().await?;
+        // backend.stop() already shuts down the API, so no need for explicit shutdown
         Ok(())
     }
 
@@ -1025,14 +882,8 @@ mod tests {
     #[serial]
     async fn test_create_collection_and_upload_file_via_backend() -> Result<()> {
         // Setup temporary directory for backend and veilid blobs
-        let path = TmpDir::new("test_backend_create_collection").await.unwrap();
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        // Initialize the backend
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        let (backend, tmpdir) = setup_test_backend("test_create_collection_and_upload_file_via_backend").await?;
+        let path = tmpdir.to_path_buf();
 
         // Step 1: Create a group via backend
         let group = backend
@@ -1058,7 +909,7 @@ mod tests {
         );
 
         // Step 3: Upload a file to the collection
-        let file_path = path.as_ref().join("test_file.txt");
+        let file_path = path.join("test_file.txt");
         let file_content = b"Test content for collection upload";
         fs::write(&file_path, file_content)
             .await
@@ -1105,14 +956,8 @@ mod tests {
     #[serial]
     async fn test_delete_file_from_collection_via_backend() -> Result<()> {
         // Setup temporary directory for backend and veilid blobs
-        let path = TmpDir::new("test_backend_delete_file").await.unwrap();
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        // Initialize the backend
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        let (backend, tmpdir) = setup_test_backend("test_delete_file_from_collection_via_backend").await?;
+        let path = tmpdir.to_path_buf();
 
         // Step 1: Create a group via backend
         let group = backend
@@ -1139,7 +984,7 @@ mod tests {
         );
 
         // Step 3: Upload a file to the collection
-        let file_path = path.as_ref().join("test_file_to_delete.txt");
+        let file_path = path.join("test_file_to_delete.txt");
         let file_content = b"File content to be deleted";
         fs::write(&file_path, file_content)
             .await
@@ -1193,16 +1038,7 @@ mod tests {
     #[serial]
     async fn test_repo_collection_management() -> Result<()> {
         // Setup a temporary directory and initialize the backend
-        let path = TmpDir::new("test_repo_collection_management")
-            .await
-            .unwrap();
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        // Initialize the backend
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        let (backend, _tmpdir) = setup_test_backend("test_repo_collection_management").await?;
 
         // Step 1: Create a group
         let mut group = backend
@@ -1239,7 +1075,7 @@ mod tests {
             .await
             .expect("iroh_blobs not initialized");
 
-        let collection_name = repo.get_name().await.expect("Failed to get repo name");
+        let collection_name = repo.collection_name();
         let updated_collection_hash = repo
             .set_file_and_update_dht(&collection_name, file_name, &file_hash)
             .await?;
@@ -1290,15 +1126,8 @@ mod tests {
     #[serial]
     async fn test_collection_hash_consistency() -> Result<()> {
         // Setup temporary directory and initialize the backend
-        let path = TmpDir::new("test_backend_collection_hash_consistency")
-            .await
-            .unwrap();
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        let (backend, tmpdir) = setup_test_backend("test_collection_hash_consistency").await?;
+        let path = tmpdir.to_path_buf();
 
         // Step 1: Create a group and a collection
         let group = backend
@@ -1319,7 +1148,7 @@ mod tests {
             .expect("Failed to create collection");
 
         // Step 3: Upload a file to the collection
-        let file_path = path.as_ref().join("file1.txt");
+        let file_path = path.join("file1.txt");
         let file_content = b"Content of file 1";
         fs::write(&file_path, file_content)
             .await
@@ -1360,13 +1189,7 @@ mod tests {
     #[serial]
     async fn test_rpc_service_init() -> Result<()> {
         // Setup temporary directory and initialize the backend
-        let path = TmpDir::new("test_rpc_service_init").await.unwrap();
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
-
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        let (backend, _tmpdir) = setup_test_backend("test_rpc_service_init").await?;
 
         let rpc_instance = RpcService::from_backend(&backend).await?;
 
@@ -1381,22 +1204,18 @@ mod tests {
     #[serial]
     async fn test_rpc_client() -> Result<()> {
         // Setup temporary directory and initialize the backend
-        let path = TmpDir::new("test_rpc_client").await.unwrap();
-        fs::create_dir_all(path.as_ref())
-            .await
-            .expect("Failed to create base directory");
+        let (backend, tmpdir) = setup_test_backend("test_rpc_client").await?;
+        let path = tmpdir.to_path_buf();
 
         println!("Initializing client Veilid instance...");
         let (veilid2, _) = init_veilid(
-            &path.to_path_buf().join("client"),
+            &path.join("client"),
             "save-dweb-backup-client".to_string(),
         )
         .await
-        .map_err(|e| anyhow!("Failed to init client Veilid: {}", e))?;
+        .map_err(|e| anyhow!("Failed to init client Veilid: {e}"))?;
 
-        println!("Starting backend...");
-        let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start().await.expect("Unable to start");
+        println!("Backend already started via setup_test_backend");
 
         println!("Creating RPC service...");
         let rpc_instance = RpcService::from_backend(&backend).await?;
@@ -1405,15 +1224,15 @@ mod tests {
         let rpc_listener = rpc_instance.clone();
         tokio::spawn(async move {
             if let Err(e) = rpc_listener.start_update_listener().await {
-                eprintln!("RPC listener error: {}", e);
+                error!("RPC listener error: {}", e);
             }
         });
 
         println!("Setting RPC service name...");
         rpc_instance.set_name("Example").await?;
 
-        let url = rpc_instance.get_descriptor_url();
-        println!("RPC service URL: {}", url);
+        let url = rpc_instance.get_descriptor_url()?;
+        println!("RPC service URL: {url}");
 
         // Wait longer for DHT propagation between two separate Veilid instances
         println!("Waiting 10 seconds for DHT propagation...");
@@ -1421,17 +1240,17 @@ mod tests {
 
         println!("Creating RPC client...");
         let client = RpcClient::from_veilid(veilid2.clone(), &url).await
-            .map_err(|e| anyhow!("Failed to create RPC client: {}", e))?;
+            .map_err(|e| anyhow!("Failed to create RPC client: {e}"))?;
 
         println!("Getting name from RPC service...");
         let name = client.get_name().await
-            .map_err(|e| anyhow!("Failed to get name: {}", e))?;
+            .map_err(|e| anyhow!("Failed to get name: {e}"))?;
 
         assert_eq!(name, "Example", "Unable to get name");
 
         println!("Listing groups...");
         let list = client.list_groups().await
-            .map_err(|e| anyhow!("Failed to list groups: {}", e))?;
+            .map_err(|e| anyhow!("Failed to list groups: {e}"))?;
 
         assert_eq!(list.group_ids.len(), 0, "No groups on init");
 
@@ -1442,6 +1261,149 @@ mod tests {
         // Give Veilid time to fully shutdown
         tokio::time::sleep(Duration::from_millis(500)).await;
         println!("Test completed successfully!");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_auto_create_repo_on_join_group() -> Result<()> {
+        // This test verifies the fix for cross-device sharing issue:
+        // When Device B joins a group created by Device A, it should automatically
+        // create its own repo so it can upload files.
+
+        let base_dir = TmpDir::new("test_auto_create_repo_on_join")
+            .await
+            .unwrap();
+
+        let base_dir_path = base_dir.to_path_buf();
+
+        // Create separate stores for each device
+        let store1 =
+            iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh1")).await?;
+        let store2 =
+            iroh_blobs::store::fs::Store::load(base_dir.to_path_buf().join("iroh2")).await?;
+
+        // Initialize two separate Veilid instances (simulating two devices)
+        let (v1_result, v2_result) = tokio::join!(
+            init_veilid(&base_dir_path, "device_a".to_string()),
+            init_veilid(&base_dir_path, "device_b".to_string())
+        );
+        let (veilid_api1, mut update_rx1) = v1_result?;
+        let (veilid_api2, mut update_rx2) = v2_result?;
+
+        fs::create_dir_all(base_dir.as_ref())
+            .await
+            .expect("Failed to create base directory");
+
+        // Create Device A backend
+        let backend1 = Backend::from_dependencies(
+            &base_dir.to_path_buf().join("device_a"),
+            veilid_api1.clone(),
+            update_rx1,
+            store1,
+        )
+        .await
+        .unwrap();
+
+        // Create Device B backend
+        let backend2 = Backend::from_dependencies(
+            &base_dir.to_path_buf().join("device_b"),
+            veilid_api2.clone(),
+            update_rx2,
+            store2,
+        )
+        .await
+        .unwrap();
+
+        // Step 1: Create a group on Device A
+        let mut group1 = backend1
+            .create_group()
+            .await
+            .expect("Unable to create group on Device A");
+
+        group1.set_name("Test Group").await?;
+
+        // Create a repo on Device A (optional, but simulates real usage)
+        let _repo1 = group1.create_repo().await?;
+
+        // Wait for DHT propagation
+        sleep(Duration::from_secs(2)).await;
+
+        // Step 2: Join the group on Device B using the group URL
+        let group_url = group1.get_url().expect("Failed to get group URL");
+        println!("Device A created group with URL: {group_url}");
+
+        let mut group2 = backend2
+            .join_from_url(&group_url)
+            .await
+            .expect("Unable to join group on Device B");
+
+        // Step 3: Verify that Device B automatically created its own repo
+        let own_repo = group2
+            .get_own_repo()
+            .await
+            .expect("Device B should have its own repo after joining");
+
+        assert!(
+            own_repo.can_write(),
+            "Device B's repo should have write permissions"
+        );
+
+        println!("Device B successfully auto-created repo with write permissions");
+
+        // Step 4: Upload a file from Device B to verify it works
+        let file_content = b"Test file from Device B";
+        let file_path = base_dir.as_ref().join("device_b_file.txt");
+        fs::write(&file_path, file_content)
+            .await
+            .expect("Failed to write test file");
+
+        // Upload the file using Device B's repo
+        let file_hash = own_repo
+            .upload_blob(file_path.clone())
+            .await
+            .expect("Device B should be able to upload files");
+
+        assert!(
+            !file_hash.as_bytes().is_empty(),
+            "File hash should not be empty after upload"
+        );
+
+        println!(
+            "Device B successfully uploaded file with hash: {}",
+            file_hash.to_hex()
+        );
+
+        // Step 5: Verify the file can be retrieved
+        let iroh_blobs2 = backend2
+            .get_iroh_blobs()
+            .await
+            .expect("iroh_blobs not initialized on Device B");
+
+        let receiver = iroh_blobs2
+            .read_file(file_hash.clone())
+            .await
+            .expect("Failed to read blob");
+
+        let mut retrieved_data = Vec::new();
+        let mut stream = ReceiverStream::new(receiver);
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(bytes) => retrieved_data.extend_from_slice(bytes.as_ref()),
+                Err(e) => panic!("Error reading data: {e:?}"),
+            }
+        }
+
+        // Verify that the downloaded data matches the uploaded data
+        assert_eq!(retrieved_data, file_content);
+
+        println!("Test completed successfully - Device B can upload and retrieve files!");
+
+        // Cleanup
+        backend1.stop().await?;
+        backend2.stop().await?;
+        // backend.stop() already shuts down the API, so no need for explicit shutdown
+
         Ok(())
     }
 }

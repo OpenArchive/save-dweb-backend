@@ -5,19 +5,51 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, path::PathBuf, sync::Arc};
 use tokio::sync::broadcast::{self, Receiver};
+use tracing::{error, info, warn};
 use url::Url;
 use veilid_core::{
-    PublicKey, SecretKey, RecordKey, CryptoSystem, CryptoTyped, DHTRecordDescriptor, KeyPair, Nonce,
-    ProtectedStore, RouteId, RoutingContext, Sequencing, SharedSecret, Stability, UpdateCallback,
-    VeilidAPI, VeilidConfig, VeilidUpdate, CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
+    PublicKey, SecretKey, RecordKey, CryptoSystem, DHTRecordDescriptor, KeyPair, Nonce,
+    ProtectedStore, RouteId, RoutingContext, Sequencing, SetDHTValueOptions, SharedSecret, Stability, UpdateCallback,
+    VeilidAPI, VeilidAPIError, VeilidConfig, VeilidUpdate, CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
 };
 
 use crate::constants::ROUTE_ID_DHT_KEY;
 
+#[cfg(test)]
+pub mod test_helpers {
+    use super::*;
+    use crate::backend::Backend;
+    use tmpdir::TmpDir;
+    use tokio::fs;
+
+    /// Setup an isolated Backend instance for testing.
+    /// Creates a unique TmpDir and initializes Veilid with a unique namespace
+    /// to avoid "Already initialized" errors between test runs.
+    pub async fn setup_test_backend(test_name: &str) -> Result<(Backend, TmpDir)> {
+        let path = TmpDir::new(test_name)
+            .await
+            .map_err(|e| anyhow!("Failed to create temp directory: {e}"))?;
+
+        let path_buf = path.to_path_buf();
+        fs::create_dir_all(&path_buf)
+            .await
+            .expect("Failed to create base directory");
+
+        let (veilid_api, update_rx) = init_veilid(&path_buf, test_name.to_string()).await?;
+
+        let store = iroh_blobs::store::fs::Store::load(path_buf.join("iroh")).await?;
+
+        let backend = Backend::from_dependencies(&path_buf, veilid_api, update_rx, store).await?;
+
+        Ok((backend, path))
+    }
+}
+
 pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
-    let mut retries = 6;
-    while retries > 0 {
-        retries -= 1;
+    let max_retries = 30;
+    let mut attempt = 0;
+    while attempt < max_retries {
+        attempt += 1;
         let result = veilid
             .new_custom_private_route(
                 &VALID_CRYPTO_KINDS,
@@ -26,11 +58,13 @@ pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
             )
             .await;
 
-        if let Ok(value) = result {
-            return Ok(value);
+        if let Ok(route_blob) = result {
+            return Ok((route_blob.route_id, route_blob.blob));
         } else if let Err(e) = &result {
-            eprintln!("Failed to create route: {e}");
+            warn!("Failed to create route (attempt {attempt}/{max_retries}): {e}");
         }
+        // Give the network a moment to stabilize before retrying.
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
     Err(anyhow!("Unable to create route, reached max retries"))
 }
@@ -54,7 +88,7 @@ pub async fn init_veilid(
     });
 
     // println!("Init veilid");
-    let veilid = veilid_core::api_startup_config(update_callback, config_inner).await?;
+    let veilid = veilid_core::api_startup(update_callback, config_inner).await?;
 
     //println!("Attach veilid");
 
@@ -68,7 +102,7 @@ pub async fn init_veilid(
         while let Ok(update) = rx.recv().await {
             if let VeilidUpdate::Attachment(attachment_state) = update {
                 if attachment_state.public_internet_ready && attachment_state.state.is_attached() {
-                    println!("Public internet ready!");
+                    info!("Veilid attached and network ready");
                     return Ok(());
                 }
             }
@@ -88,7 +122,8 @@ pub fn config_for_dir(base_dir: PathBuf, namespace: String) -> VeilidConfig {
         program_name: "save-dweb-backend".to_string(),
         namespace,
         protected_store: veilid_core::VeilidConfigProtectedStore {
-            // avoid prompting for password, don't do this in production
+            // Android doesn't have keyring/password system available, so use insecure storage.
+            // For desktop builds, this could be made conditional on cfg!(target_os).
             always_use_insecure_storage: true,
             directory: base_dir
                 .join("protected_store")
@@ -117,18 +152,25 @@ pub struct CommonKeypair {
 }
 
 impl CommonKeypair {
+    pub fn keypair_store_key(id: &RecordKey) -> String {
+        // Stable storage key independent of RecordKey::to_string() formatting.
+        hex::encode(id.opaque().ref_value())
+    }
+
     pub async fn store_keypair(&self, protected_store: &ProtectedStore) -> Result<()> {
         let keypair_data =
-            serde_cbor::to_vec(&self).map_err(|e| anyhow!("Failed to serialize keypair: {}", e))?;
+            serde_cbor::to_vec(&self).map_err(|e| anyhow!("Failed to serialize keypair: {e}"))?;
+        let store_key = Self::keypair_store_key(&self.id);
         protected_store
-            .save_user_secret(self.id.to_string(), &keypair_data)
-            .map_err(|e| anyhow!("Unable to store keypair: {}", e))?;
+            .save_user_secret(store_key, &keypair_data)
+            .map_err(|e| anyhow!("Unable to store keypair: {e}"))?;
         Ok(())
     }
 
     pub async fn load_keypair(protected_store: &ProtectedStore, id: &RecordKey) -> Result<Self> {
+        let lookup_key = Self::keypair_store_key(id);
         let keypair_data = protected_store
-            .load_user_secret(id.to_string())
+            .load_user_secret(lookup_key)
             .map_err(|_| anyhow!("Failed to load keypair"))?
             .ok_or_else(|| anyhow!("Keypair not found"))?;
         let retrieved_keypair: CommonKeypair = serde_cbor::from_slice(&keypair_data)
@@ -147,12 +189,12 @@ pub trait DHTEntity {
 
     // Default method to get the owner key
     fn owner_key(&self) -> PublicKey {
-        *self.get_dht_record().owner()
+        self.get_dht_record().owner().clone()
     }
 
     // Default method to get the owner secret
     fn owner_secret(&self) -> Option<SecretKey> {
-        self.get_dht_record().owner_secret().copied()
+        self.get_dht_record().owner_secret().clone()
     }
 
     fn encrypt_aead(&self, data: &[u8], associated_data: Option<&[u8]>) -> Result<Vec<u8>> {
@@ -162,11 +204,11 @@ pub trait DHTEntity {
             .get(CRYPTO_KIND_VLD0)
             .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
         let nonce = crypto_system.random_nonce();
-        let mut buffer = Vec::with_capacity(nonce.bytes.len() + data.len());
-        buffer.extend_from_slice(&nonce.bytes);
+        let mut buffer = Vec::with_capacity(nonce.bytes().len() + data.len());
+        buffer.extend_from_slice(nonce.bytes());
         let encrypted_chunk = crypto_system
             .encrypt_aead(data, &nonce, &self.get_encryption_key(), associated_data)
-            .map_err(|e| anyhow!("Failed to encrypt data: {}", e))?;
+            .map_err(|e| anyhow!("Failed to encrypt data: {e}"))?;
         buffer.extend_from_slice(&encrypted_chunk);
         Ok(buffer)
     }
@@ -181,7 +223,7 @@ pub trait DHTEntity {
         let nonce: [u8; 24] = data[..24]
             .try_into()
             .map_err(|_| anyhow!("Failed to convert nonce slice to array"))?;
-        let nonce = Nonce::new(nonce);
+        let nonce = Nonce::new(&nonce);
         let encrypted_data = &data[24..];
         crypto_system
             .decrypt_aead(
@@ -190,7 +232,7 @@ pub trait DHTEntity {
                 &self.get_encryption_key(),
                 associated_data,
             )
-            .map_err(|e| anyhow!("Failed to decrypt data: {}", e))
+            .map_err(|e| anyhow!("Failed to decrypt data: {e}"))
     }
 
     async fn set_name(&self, name: &str) -> Result<()> {
@@ -198,7 +240,7 @@ pub trait DHTEntity {
         let key = self.get_dht_record().key().clone();
         let encrypted_name = self.encrypt_aead(name.as_bytes(), None)?;
         routing_context
-            .set_dht_value(key, 0, encrypted_name, None)
+            .set_dht_value(key, 0, encrypted_name, Some(SetDHTValueOptions::default()))
             .await?;
         Ok(())
     }
@@ -211,7 +253,7 @@ pub trait DHTEntity {
             Some(value) => {
                 let decrypted_name = self.decrypt_aead(value.data(), None)?;
                 Ok(String::from_utf8(decrypted_name)
-                    .map_err(|e| anyhow!("Failed to convert DHT value to string: {}", e))?)
+                    .map_err(|e| anyhow!("Failed to convert DHT value to string: {e}"))?)
             }
             None => Err(anyhow!("Value not found")),
         }
@@ -232,10 +274,10 @@ pub trait DHTEntity {
                 dht_record.key().clone(),
                 ROUTE_ID_DHT_KEY,
                 route_id_blob,
-                None,
+                Some(SetDHTValueOptions::default()),
             )
             .await
-            .map_err(|e| anyhow!("Failed to store route ID blob in DHT: {}", e))?;
+            .map_err(|e| anyhow!("Failed to store route ID blob in DHT: {e}"))?;
 
         Ok(())
     }
@@ -271,17 +313,17 @@ pub trait DHTEntity {
         let route_id = match veilid.import_remote_private_route(route_id_blob) {
             Ok(route) => route,
             Err(e) => {
-                eprintln!("Failed to import remote private route: {e:?}");
+                error!("Failed to import remote private route: {e:?}");
                 return Err(e.into());
             }
         };
 
         // Send an AppMessage to the repo owner using the imported route ID
         if let Err(e) = routing_context
-            .app_message(veilid_core::Target::PrivateRoute(route_id), message)
+            .app_message(veilid_core::Target::RouteId(route_id), message)
             .await
         {
-            eprintln!("Failed to send message: {e:?}");
+            error!("Failed to send message: {e:?}");
             return Err(e.into());
         }
 
