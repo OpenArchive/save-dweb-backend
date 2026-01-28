@@ -740,7 +740,7 @@ mod tests {
         let mut retries = 10;
         while retries > 0 {
             if group2.download_hash_from_peers(&file_hash).await.is_ok() {
-                println!("Download success!");
+                tracing::info!("Download success!");
                 break;
             }
             retries -= 1;
