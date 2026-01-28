@@ -7,7 +7,8 @@ edition = "2021"
 iroh = "0.24.0"
 iroh-blobs = "0.24.0"
 # Pin to avoid keyvaluedb-sqlite 0.1.6 + rusqlite 0.38 break (u64 FromSql not implemented)
-keyvaluedb-sqlite = "0.1.5"
+keyvaluedb-sqlite = "=0.1.5"
+rusqlite = "=0.37.0"
 veilid-core = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.1" }
 # v0.3.0 matches Veilid 0.5.1 API
 veilid-iroh-blobs = { git = "https://github.com/RangerMauve/veilid-iroh-blobs", tag = "v0.3.0" }
