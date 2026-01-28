@@ -4,17 +4,13 @@ on: [push, pull_request]
 
 jobs:
   lint_and_test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macOS-latest]
-        rust: [stable]
+    runs-on: ubuntu-latest
 
     steps:
       - name: Set up Rust toolchain
         uses: hecrj/setup-rust-action@v2
         with:
-          rust-version: ${{ matrix.rust }}
+          rust-version: stable
       
       - name: Check out the code
         uses: actions/checkout@v4
