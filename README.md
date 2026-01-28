@@ -460,6 +460,9 @@ The Save DWeb Backend is built using the Rust programming language, leveraging i
 
 
 * Run tests with `cargo test`
+* Tests can be slow (DHT/network). To run in the background and inspect later:
+  `RUST_MIN_STACK=8388608 cargo test -- --test-threads=1 2>&1 | tee test_output.log`
+  Output is written to `test_output.log`; `test_*.log` is gitignored.
 * Format code with `cargo fmt`
 * Lint with `cargo clippy`
 * Run the backend with `cargo run`

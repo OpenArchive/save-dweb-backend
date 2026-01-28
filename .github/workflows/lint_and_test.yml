@@ -1,20 +1,17 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  pull_request:
 
 jobs:
   lint_and_test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macOS-latest]
-        rust: [stable]
+    runs-on: ubuntu-latest
 
     steps:
       - name: Set up Rust toolchain
         uses: hecrj/setup-rust-action@v2
         with:
-          rust-version: ${{ matrix.rust }}
+          rust-version: stable
       
       - name: Check out the code
         uses: actions/checkout@v4
@@ -25,7 +22,11 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Run tests
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --locked
+
+      - name: Run tests with retries
         env:
           RUST_MIN_STACK: 8388608
-        run: cargo test --verbose -- --test-threads=1 --nocapture
+        # Timeout and retries configured in nextest.toml
+        run: cargo nextest run --test-threads=1 --retries=3

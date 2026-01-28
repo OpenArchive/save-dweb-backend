@@ -4,7 +4,7 @@ use crate::group::Group;
 use crate::repo::Repo;
 use crate::{
     constants::ROUTE_ID_DHT_KEY,
-    group::{PROTOCOL_SCHEME, URL_DHT_KEY, URL_ENCRYPTION_KEY},
+    group::{PROTOCOL_SCHEME, URL_DHT_KEY, URL_ENCRYPTION_KEY, URL_PUBLIC_KEY, URL_SECRET_KEY},
 };
 
 use anyhow::{anyhow, Result};
@@ -19,11 +19,11 @@ use std::convert::TryInto;
 use std::sync::Arc;
 use std::vec;
 use tokio::sync::broadcast::error::RecvError;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use url::Url;
 use veilid_core::{
     PublicKey, SecretKey, RecordKey, CryptoSystem, DHTRecordDescriptor,
-    DHTSchema, KeyPair, RoutingContext, SharedSecret, Target, TypedRecordKey, VeilidAPI, VeilidAppCall,
+    DHTSchema, KeyPair, RoutingContext, SetDHTValueOptions, SharedSecret, Target, VeilidAPI, VeilidAppCall,
     VeilidUpdate, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::tunnels::OnNewRouteCallback;
@@ -97,10 +97,16 @@ pub fn parse_url_for_rpc(url_string: &str) -> Result<RpcKeys> {
         .map_err(|_| anyhow!("Missing 'dht' key in the URL"))?;
     let encryption_key = crate::backend::shared_secret_from_query(&url, URL_ENCRYPTION_KEY)
         .map_err(|_| anyhow!("Missing 'enc' key in the URL"))?;
+    let owner_public_key = crate::backend::public_key_from_query(&url, URL_PUBLIC_KEY)
+        .map_err(|_| anyhow!("Missing 'pk' key in the URL"))?;
+    let owner_secret_key = Some(crate::backend::secret_key_from_query(&url, URL_SECRET_KEY)
+        .map_err(|_| anyhow!("Missing 'sk' key in the URL"))?);
 
     Ok(RpcKeys {
         dht_key,
         encryption_key,
+        owner_public_key,
+        owner_secret_key,
     })
 }
 
@@ -133,7 +139,7 @@ impl RpcClient {
         // Get the route ID blob and target
         let blob = self.descriptor.get_route_id_blob().await?;
         let route_id = self.veilid.import_remote_private_route(blob)?;
-        let target = Target::PrivateRoute(route_id);
+        let target = Target::RouteId(route_id);
 
         // Prefix the message type byte
         let mut payload = vec![message_type];
@@ -156,7 +162,7 @@ impl RpcClient {
             // Parse and handle an error response
             let rpc_response: RpcResponse<()> = serde_cbor::from_slice(payload)?;
             if let Some(err) = rpc_response.error {
-                return Err(anyhow!("RPC Error: {}", err));
+                return Err(anyhow!("RPC Error: {err}"));
             } else {
                 return Err(anyhow!("Unknown error format in RPC response"));
             }
@@ -164,9 +170,7 @@ impl RpcClient {
 
         if response_message_type != message_type {
             return Err(anyhow!(
-                "Unexpected message type in response. Expected: {}, Got: {}",
-                message_type,
-                response_message_type
+                "Unexpected message type in response. Expected: {message_type}, Got: {response_message_type}"
             ));
         }
 
@@ -211,6 +215,8 @@ impl RpcClient {
 pub struct RpcKeys {
     pub dht_key: RecordKey,
     pub encryption_key: SharedSecret,
+    pub owner_public_key: PublicKey,
+    pub owner_secret_key: Option<SecretKey>,
 }
 
 #[derive(Clone)]
@@ -229,14 +235,21 @@ impl RpcServiceDescriptor {
     ) -> Result<Self> {
         let keys = parse_url_for_rpc(url)?;
 
-        let record_key = TypedRecordKey::new(CRYPTO_KIND_VLD0, keys.dht_key);
+        let record_key = keys.dht_key.clone();
 
+        // In v0.5.1, DHT encryption is enabled by default, so we need to provide the owner keypair
+        // to decrypt. We get this from the URL that was shared with us.
+        let bare_keypair = veilid_core::BareKeyPair::new(
+            keys.owner_public_key.clone().into_value(),
+            keys.owner_secret_key.clone().unwrap().into_value(),
+        );
         let dht_record = routing_context
-            .open_dht_record(record_key, None)
+            .open_dht_record(
+                record_key,
+                Some(KeyPair::new(CRYPTO_KIND_VLD0, bare_keypair)),
+            )
             .await
-            .map_err(|e| anyhow!("Failed to open DHT record: {}", e))?;
-
-        let owner_key = dht_record.owner();
+            .map_err(|e| anyhow!("Failed to open DHT record: {e}"))?;
 
         Ok(RpcServiceDescriptor {
             keypair: keys,
@@ -246,20 +259,32 @@ impl RpcServiceDescriptor {
         })
     }
 
-    pub fn get_url(&self) -> String {
+    pub fn get_url(&self) -> Result<String> {
+        let owner_secret = self.dht_record.owner_secret()
+            .ok_or_else(|| anyhow!("Cannot generate URL: no owner secret"))?;
         let mut url = Url::parse(format!("{PROTOCOL_SCHEME}:?").as_str()).unwrap();
 
         url.query_pairs_mut()
-            .append_pair(URL_DHT_KEY, self.get_id().encode_hex::<String>().as_str())
+            // Include the record encryption key in the encoded DHT key.
+            .append_pair(URL_DHT_KEY, self.get_id().ref_value().encode().as_str())
             .append_pair(
                 URL_ENCRYPTION_KEY,
-                self.get_encryption_key().encode_hex::<String>().as_str(),
+                hex::encode(self.get_encryption_key().ref_value().bytes()).as_str(),
+            )
+            .append_pair(
+                URL_PUBLIC_KEY,
+                hex::encode(self.dht_record.owner().ref_value().bytes()).as_str(),
+            )
+            .append_pair(
+                URL_SECRET_KEY,
+                hex::encode(owner_secret.ref_value().bytes()).as_str(),
             )
             .append_key_only("rpc");
 
         let url_string = url.to_string();
-        info!("Descriptor URL: {}", url_string);
-        url_string
+        // Avoid logging secrets in URLs (pk/sk/enc).
+        info!("Descriptor URL generated (redacted)");
+        Ok(url_string)
     }
     pub async fn get_route_id_blob(&self) -> Result<Vec<u8>> {
         let value = self
@@ -279,10 +304,10 @@ impl RpcServiceDescriptor {
                 self.dht_record.key().clone(),
                 ROUTE_SUBKEY,
                 route_id_blob,
-                None,
+                Some(SetDHTValueOptions::default()),
             )
             .await
-            .map_err(|e| anyhow!("Failed to store route ID blob in DHT: {}", e))?;
+            .map_err(|e| anyhow!("Failed to store route ID blob in DHT: {e}"))?;
 
         Ok(())
     }
@@ -298,11 +323,10 @@ impl RpcService {
 
         let routing_context = veilid.routing_context()?;
         let schema = DHTSchema::dflt(2)?; // Title + Route Id
-        let kind = Some(CRYPTO_KIND_VLD0);
 
         // TODO: try loading from protected store before creating
         let dht_record = routing_context
-            .create_dht_record(schema, None, kind)
+            .create_dht_record(CRYPTO_KIND_VLD0, schema, None)
             .await?;
         let crypto = veilid.crypto()?;
         let crypto_system = crypto
@@ -312,8 +336,10 @@ impl RpcService {
         let encryption_key = crypto_system.random_shared_secret();
 
         let keypair = RpcKeys {
-            dht_key: dht_record.key().value,
+            dht_key: dht_record.key().clone(),
             encryption_key,
+            owner_public_key: dht_record.owner().clone(),
+            owner_secret_key: dht_record.owner_secret().clone(),
         };
 
         let descriptor = RpcServiceDescriptor {
@@ -333,7 +359,7 @@ impl RpcService {
                     .update_route_on_dht(route_id_blob)
                     .await
                 {
-                    eprintln!(
+                    error!(
                         "Unable to update route after rebuild for RPC service: {err}"
                     );
                 }
@@ -349,7 +375,7 @@ impl RpcService {
         })
     }
 
-    pub fn get_descriptor_url(&self) -> String {
+    pub fn get_descriptor_url(&self) -> Result<String> {
         self.descriptor.get_url()
     }
 
@@ -481,7 +507,8 @@ impl RpcService {
 
     pub async fn join_group(&self, request: JoinGroupRequest) -> RpcResponse<JoinGroupResponse> {
         let group_url = request.group_url;
-        info!("Joining group with URL: {}", group_url);
+        // Avoid logging secrets in URLs (pk/sk/enc).
+        info!("Joining group with URL (redacted)");
 
         // Use the backend to join the group from the provided URL
         let backend = self.backend.clone();
@@ -560,7 +587,7 @@ impl RpcService {
             }
         };
 
-        let group_key = RecordKey::new(group_bytes);
+        let group_key = RecordKey::new(CRYPTO_KIND_VLD0, veilid_core::BareRecordKey::new(veilid_core::BareOpaqueRecordKey::from(&group_bytes[..]), None));
 
         match backend.close_group(group_key).await {
             Ok(_) => RpcResponse {
@@ -639,35 +666,7 @@ async fn replicate_repo(group: &Group, repo: &Repo) -> Result<()> {
 }
 
 async fn download(group: &Group, hash: &Hash) -> Result<()> {
-    let repo_keys: Vec<RecordKey> = group.list_repos().await;
-
-    if repo_keys.is_empty() {
-        return Err(anyhow!("Cannot download hash. No repos found"));
-    }
-
-    for repo_key in repo_keys.iter() {
-        let repo = group.get_repo(repo_key).await?;
-        if let Ok(route_id_blob) = repo.get_route_id_blob().await {
-            println!(
-                "Downloading {} from {} via {:?}",
-                hash,
-                repo.id(),
-                route_id_blob
-            );
-            // Attempt to download the file from the peer
-            let result = group
-                .iroh_blobs
-                .download_file_from(route_id_blob, hash)
-                .await;
-            if result.is_ok() {
-                return Ok(());
-            } else {
-                eprintln!("Unable to download from peer, {}", result.unwrap_err());
-            }
-        }
-    }
-
-    Err(anyhow!("Unable to download from any peer"))
+    group.download_hash_from_peers(hash).await
 }
 
 impl DHTEntity for RpcServiceDescriptor {
@@ -676,13 +675,13 @@ impl DHTEntity for RpcServiceDescriptor {
         let key = self.get_dht_record().key().clone();
         let encrypted_name = self.encrypt_aead(name.as_bytes(), None)?;
         routing_context
-            .set_dht_value(key, 0, encrypted_name, None)
+            .set_dht_value(key, 0, encrypted_name, Some(SetDHTValueOptions::default()))
             .await?;
         Ok(())
     }
 
     fn get_id(&self) -> RecordKey {
-        self.dht_record.key().value
+        self.dht_record.key().clone()
     }
 
     fn get_secret_key(&self) -> Option<SecretKey> {
