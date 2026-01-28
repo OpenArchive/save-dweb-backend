@@ -158,18 +158,21 @@ impl Group {
                         .download_file_from(route_id_blob, hash)
                         .await;
                     
-                    if result.is_ok() {
-                        info!("Successfully downloaded hash {} from peer {}",
-                            hash.to_hex(),
-                            hex::encode(repo.id().opaque().ref_value())
-                        );
-                        return Ok(());
-                    } else {
-                        warn!(
-                            "Unable to download from peer {}: {}",
-                            hex::encode(repo.id().opaque().ref_value()),
-                            result.unwrap_err()
-                        );
+                    match result {
+                        Ok(()) => {
+                            info!("Successfully downloaded hash {} from peer {}",
+                                hash.to_hex(),
+                                hex::encode(repo.id().opaque().ref_value())
+                            );
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Unable to download from peer {}: {}",
+                                hex::encode(repo.id().opaque().ref_value()),
+                                e
+                            );
+                        }
                     }
                 } else {
                     warn!(
