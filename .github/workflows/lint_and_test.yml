@@ -28,4 +28,5 @@ jobs:
       - name: Run tests with retries
         env:
           RUST_MIN_STACK: 8388608
-        run: cargo nextest run --test-threads=1 --retries=3 --test-timeout=600s
+        # Timeout and retries configured in nextest.toml
+        run: cargo nextest run --test-threads=1 --retries=3
