@@ -1,0 +1,12 @@
+# Nextest configuration for save-dweb-backend
+# Veilid network tests can take several minutes due to DHT operations and network setup
+
+[profile.default]
+# Set timeout to 10 minutes per test (Veilid network operations can be slow)
+test-timeout = "600s"
+
+# Retry flaky tests up to 3 times
+retries = 3
+
+# Run tests serially to avoid Veilid network conflicts
+test-threads = 1
