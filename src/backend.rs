@@ -349,12 +349,47 @@ impl Backend {
             keys.public_key.clone().into_value(),
             keys.secret_key.clone().unwrap().into_value(),
         );
-        let dht_record = routing_context
-            .open_dht_record(
-                record_key.clone(),
-                Some(KeyPair::new(CRYPTO_KIND_VLD0, bare_keypair)),
-            )
-            .await?;
+        let keypair = Some(KeyPair::new(CRYPTO_KIND_VLD0, bare_keypair));
+        let mut dht_record = None;
+        let max_retries = 6;
+        let mut retries = max_retries;
+
+        while retries > 0 {
+            retries -= 1;
+            match routing_context
+                .open_dht_record(record_key.clone(), keypair.clone())
+                .await
+            {
+                Ok(record) => {
+                    dht_record = Some(record);
+                    break;
+                }
+                Err(e) => {
+                    warn!("Failed to open group DHT record: {e}. Retries left: {retries}");
+                    if retries == 0 {
+                        return Err(anyhow!(
+                            "Unable to open group DHT record after {max_retries} attempts: {e}"
+                        ));
+                    }
+                }
+            }
+            let backoff_ms = 500 * (max_retries - retries) as u64;
+            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+        }
+
+        let dht_record = dht_record.ok_or_else(|| anyhow!("Group DHT record retrieval failed"))?;
+
+        // Persist the keypair so refresh_group/get_group can reload it later
+        let protected_store = veilid.protected_store().unwrap();
+        CommonKeypair {
+            id: record_key.clone(),
+            public_key: keys.public_key.clone(),
+            secret_key: keys.secret_key.clone(),
+            encryption_key: keys.encryption_key.clone(),
+        }
+        .store_keypair(&protected_store)
+        .await
+        .map_err(|e| anyhow!(e))?;
 
         let mut group = Group::new(
             dht_record.clone(),
