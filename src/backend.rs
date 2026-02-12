@@ -379,6 +379,18 @@ impl Backend {
 
         let dht_record = dht_record.ok_or_else(|| anyhow!("Group DHT record retrieval failed"))?;
 
+        // Persist the keypair so refresh_group/get_group can reload it later
+        let protected_store = veilid.protected_store().unwrap();
+        CommonKeypair {
+            id: record_key.clone(),
+            public_key: keys.public_key.clone(),
+            secret_key: keys.secret_key.clone(),
+            encryption_key: keys.encryption_key.clone(),
+        }
+        .store_keypair(&protected_store)
+        .await
+        .map_err(|e| anyhow!(e))?;
+
         let mut group = Group::new(
             dht_record.clone(),
             keys.encryption_key.clone(),

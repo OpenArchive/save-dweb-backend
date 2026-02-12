@@ -138,9 +138,13 @@ impl Group {
         }
 
         // Retry configuration
-        const MAX_RETRIES: u32 = 3;
+        // Veilid route establishment + iroh tunnel setup can be transiently flaky, especially
+        // under load in CI or when routes are regenerating. Keep this bounded but resilient.
+        // Keep this bounded: higher-level callers (HTTP endpoints/tests) can retry too.
+        const MAX_RETRIES: u32 = 5;
         const INITIAL_DELAY_MS: u64 = 500;
-        const MAX_DELAY_MS: u64 = 2000;
+        const MAX_DELAY_MS: u64 = 4000;
+        const PER_PEER_TIMEOUT_SECS: u64 = 10;
 
         for attempt in 0..MAX_RETRIES {
             for repo in repos.iter() {
@@ -153,24 +157,34 @@ impl Group {
                 
                 if let Ok(route_id_blob) = repo.get_route_id_blob().await {
                     // It's faster to try and fail, than to ask then try
-                    let result = self
-                        .iroh_blobs
-                        .download_file_from(route_id_blob, hash)
-                        .await;
-                    
+                    // Guard against hung downloads so a single peer doesn't stall the whole request.
+                    let result = tokio::time::timeout(
+                        tokio::time::Duration::from_secs(PER_PEER_TIMEOUT_SECS),
+                        self.iroh_blobs.download_file_from(route_id_blob, hash),
+                    )
+                    .await;
+
                     match result {
-                        Ok(()) => {
+                        Ok(Ok(())) => {
                             info!("Successfully downloaded hash {} from peer {}",
                                 hash.to_hex(),
                                 hex::encode(repo.id().opaque().ref_value())
                             );
                             return Ok(());
                         }
-                        Err(e) => {
+                        Ok(Err(e)) => {
                             warn!(
                                 "Unable to download from peer {}: {}",
                                 hex::encode(repo.id().opaque().ref_value()),
                                 e
+                            );
+                        }
+                        Err(_) => {
+                            warn!(
+                                "Timed out downloading hash {} from peer {} after {}s",
+                                hash.to_hex(),
+                                hex::encode(repo.id().opaque().ref_value()),
+                                PER_PEER_TIMEOUT_SECS
                             );
                         }
                     }
