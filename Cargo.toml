@@ -1,19 +1,15 @@
 [package]
 name = "save-dweb-backend"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 
 [dependencies]
 iroh = "0.24.0"
 iroh-blobs = "0.24.0"
-# Pin to avoid keyvaluedb-sqlite 0.1.6 + rusqlite 0.38 break (u64 FromSql not implemented)
-keyvaluedb-sqlite = "=0.1.5"
-keyvaluedb = "=0.1.6"        # pin to prevent 0.1.7 which breaks keyvaluedb-sqlite 0.1.5
-rusqlite = "=0.37.0"
-veilid-core = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.1" }
-veilid-tools = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.1" }
-# v0.3.0 matches Veilid 0.5.1 API
-veilid-iroh-blobs = { git = "https://github.com/RangerMauve/veilid-iroh-blobs", tag = "v0.3.0" }
+veilid-core = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.2" }
+veilid-tools = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.2" }
+# v0.3.1 matches Veilid 0.5.2 API
+veilid-iroh-blobs = { git = "https://github.com/RangerMauve/veilid-iroh-blobs", tag = "v0.3.1" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 xdg = "2.4"
@@ -35,7 +31,13 @@ hex = "0.4.3"
 rand = "0.8.5"
 base64 = "0.22.1"
 
-# Temporary patch for Veilid fanout queue underflow bug
-[patch."https://gitlab.com/veilid/veilid.git"]
-veilid-core = { git = "https://gitlab.com/tripledoublev/veilid.git", branch = "fix-underflow" }
-veilid-tools = { git = "https://gitlab.com/tripledoublev/veilid.git", branch = "fix-underflow" }
+# Patch iroh crates to relax hickory-resolver pin for veilid-core 0.5.2 compat
+# All iroh workspace crates must come from the same source to avoid duplicate type errors
+[patch.crates-io]
+iroh = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
+iroh-net = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
+iroh-base = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
+iroh-metrics = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
+iroh-blobs = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
+iroh-docs = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
+iroh-gossip = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
