@@ -310,7 +310,7 @@ impl Group {
 
         let mut count = 0;
 
-        while count < (size - 1) {
+        while count + 1 < size {
             let value = self
                 .routing_context
                 .get_dht_value(record_key.clone(), (count + 1).try_into()?, true)
