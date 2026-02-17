@@ -1,0 +1,42 @@
+name: CI Fast Dev Cycle
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint_and_smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Set up Rust toolchain
+        uses: hecrj/setup-rust-action@v2
+        with:
+          rust-version: stable
+
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Install Clippy
+        run: rustup component add clippy
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --locked
+
+      - name: Run smoke tests (fast profile)
+        env:
+          RUST_MIN_STACK: 8388608
+        run: >
+          cargo nextest run
+          --profile dev-cycle
+          --status-level=all
+          --no-fail-fast
+          -E 'test(known_group_persistence)
+          | test(group_name_persistence)
+          | test(repo_persistence)
+          | test(test_rpc_service_init)
+          | test(test_rpc_client)'

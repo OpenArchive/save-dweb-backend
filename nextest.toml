@@ -2,11 +2,23 @@
 # Veilid network tests can take several minutes due to DHT operations and network setup
 
 [profile.default]
-# Set timeout to 10 minutes per test (Veilid network operations can be slow)
-test-timeout = "600s"
+# Set timeout budget for slow Veilid tests
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 # Retry flaky tests up to 3 times
 retries = 3
 
 # Run tests serially to avoid Veilid network conflicts
 test-threads = 1
+
+# Fast feedback profile for development cycles.
+# This profile intentionally keeps a tighter timeout/retry budget.
+[profile.dev-cycle]
+slow-timeout = { period = "30s", terminate-after = 4 }
+retries = 1
+test-threads = 1
+
+[[profile.dev-cycle.overrides]]
+filter = 'test(repo_persistence) | test(test_auto_create_repo_on_join_group)'
+slow-timeout = { period = "45s", terminate-after = 4 }
+retries = 2
