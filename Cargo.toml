@@ -9,7 +9,7 @@ iroh-blobs = "0.24.0"
 veilid-core = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.2" }
 veilid-tools = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.2" }
 # v0.3.3 matches Veilid 0.5.2 API
-veilid-iroh-blobs = { git = "https://github.com/RangerMauve/veilid-iroh-blobs", tag = "v0.3.1" }
+veilid-iroh-blobs = { git = "https://github.com/RangerMauve/veilid-iroh-blobs", tag = "v0.3.2" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 xdg = "2.4"
@@ -34,10 +34,10 @@ base64 = "0.22.1"
 # Patch iroh crates to relax hickory-resolver pin for veilid-core 0.5.2 compat
 # All iroh workspace crates must come from the same source to avoid duplicate type errors
 [patch.crates-io]
-iroh = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
-iroh-net = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
-iroh-base = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
-iroh-metrics = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
-iroh-blobs = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
-iroh-docs = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
-iroh-gossip = { git = "https://github.com/tripledoublev/iroh.git", branch = "relax-hickory" }
+iroh = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh-net = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh-base = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh-metrics = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh-blobs = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh-docs = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh-gossip = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }

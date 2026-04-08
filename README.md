@@ -11,7 +11,7 @@ OpenArchive’s *Save *application offers several storage options for archiving 
 
 P2P networks are decentralized systems where nodes (a.k.a. peers) function as both clients and servers, enabling direct resource sharing and collaboration without relying on centralized infrastructure. Typically, each participating node maintains equal privileges and can initiate or fulfill requests for data, bandwidth, or other network services. A key benefit of a P2P network is that its decentralized architecture removes the risk of a single point of failure or control found in centralized systems. 
 
-The *Save* DWeb Backend relies on two P2P protocols, [Veilid](https://veilid.com/) and [Iroh](https://www.iroh.computer/), selected for their different strengths. Veilid offers secure peer discovery, connections, and public key cryptography. It provides encrypted and anonymous P2P connections by routing traffic through multiple peers in a similar setup to TOR. Iroh is used for blob replication and data storage. It handles collections of data that change over time, ensuring reliable data management with integrity verification.
+The *Save* DWeb Backend relies on two P2P protocols, [Veilid](https://veilid.com/) and [Iroh](https://www.iroh.computer/), selected for their different strengths. Veilid provides peer discovery, routing, and public key cryptography for this backend. Iroh is used for blob-addressed storage and hash verification. In this codebase, blob transfer is mediated by `veilid_iroh_blobs` tunnels built on Veilid routes rather than plain direct Iroh peer connections. Privacy and unlinkability therefore depend on Veilid's routing properties and should be treated as an evolving, experimental security property rather than a guaranteed anonymity layer.
 
 
 ##  1.2 Key Concepts & Terminology
@@ -98,7 +98,7 @@ Group Data Retrieval and Verification Flow
 1. Initialization: The backend sets up storage and loads known groups.
 2. Groups: Users create or join groups with cryptographic keys.
 3. Repositories: Each user in a group holds their data and route ID in a Repo which is linked to from the group.
-4. Peer Communication: Veilid handles secure connections; Iroh provides data verification.
+4. Peer Communication: Veilid handles secure routed connections; Iroh provides blob storage and integrity verification.
 
 
 ## 2.2 Groups
@@ -318,7 +318,7 @@ Tunnels and RouteIDs communication flow in Veilid
 
 ### Encryption
 
-In-transic encryption is handled by Veilid’s routes. Connections use Onion Routing to send packets through at least one other node on each side, thus hiding the IP address of the sender and receiver from each other and preventing intermediate nodes from knowing the full route a packet will take.
+In-transit encryption is handled by Veilid routes. This backend relies on Veilid private routes for peer-to-peer transport, but it should not describe that transport as providing guaranteed anonymity. Route privacy depends on the current Veilid implementation and threat model, and users should treat DWeb networking as experimental.
 
 
 
@@ -421,6 +421,17 @@ The **trust model** in `save-dweb-backend` is designed to ensure that **only aut
 
 * **Regular Dependency Updates**: Keep all dependencies updated to mitigate vulnerabilities.
 * Use a tool like `cargo audit` to check for vulnerabilities in your dependencies.
+* Avoid floating git dependencies for security-sensitive networking crates; pin any temporary forks to immutable commits and retire them once upstream releases are available.
+
+### Network Privacy Notes
+
+This backend does not instantiate a plain public Iroh endpoint for peer replication. Instead, it passes blobs over `veilid_iroh_blobs` tunnels created from Veilid route IDs, then verifies content in the local Iroh store.
+
+That design changes the threat model relative to stock Iroh documentation, but it does not eliminate privacy risk:
+
+* Network metadata exposure depends on Veilid route behavior and any weaknesses in Veilid's anonymity properties.
+* Peers who are invited into a group are still trusted participants and may learn timing, membership, or replicated-content metadata through normal protocol operation.
+* DWeb features should be communicated as experimental until the underlying transport assumptions have been reviewed upstream and validated for the intended deployment model.
 
 
 ##  5. Implementation
