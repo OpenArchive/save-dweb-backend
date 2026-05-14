@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
@@ -51,12 +51,12 @@ fn unique_namespace(prefix: &str) -> String {
 }
 
 async fn init_veilid_with_logging(
-    base_dir: &PathBuf,
+    base_dir: &Path,
     namespace: String,
     attach_timeout: Duration,
     require_public_internet_ready: bool,
 ) -> Result<(VeilidAPI, broadcast::Receiver<VeilidUpdate>)> {
-    let config = save_dweb_backend::common::config_for_dir(base_dir.clone(), namespace);
+    let config = save_dweb_backend::common::config_for_dir(base_dir.to_path_buf(), namespace);
 
     let (tx, mut rx) = broadcast::channel(256);
     let update_callback: UpdateCallback = std::sync::Arc::new(move |update| {
