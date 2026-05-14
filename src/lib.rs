@@ -1235,8 +1235,9 @@ mod tests {
         println!("RPC service URL: {url}");
 
         // Wait longer for DHT propagation between two separate Veilid instances
-        println!("Waiting 10 seconds for DHT propagation...");
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        // Veilid 0.5.3 requires complete bootstrap before PublicInternet Ready
+        println!("Waiting 20 seconds for DHT propagation...");
+        tokio::time::sleep(Duration::from_secs(20)).await;
 
         println!("Creating RPC client...");
         let client = RpcClient::from_veilid(veilid2.clone(), &url).await

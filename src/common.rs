@@ -58,8 +58,8 @@ pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
             .new_custom_private_route(PrivateSpec {
                 crypto_kinds: VALID_CRYPTO_KINDS.to_vec(),
                 hop_count: 0,
-                stability: Stability::LowLatency,
-                sequencing: Sequencing::NoPreference,
+                stability: Stability::Reliable,
+                sequencing: Sequencing::PreferOrdered,
             })
             .await;
 

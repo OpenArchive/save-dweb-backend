@@ -1,5 +1,5 @@
 use crate::backend::{record_key_from_query, Backend};
-use crate::common::DHTEntity;
+use crate::common::{make_route, DHTEntity};
 use crate::group::Group;
 use crate::repo::Repo;
 use crate::{
@@ -19,11 +19,12 @@ use std::convert::TryInto;
 use std::sync::Arc;
 use std::vec;
 use tokio::sync::broadcast::error::RecvError;
-use tracing::{error, info, warn};
+use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
 use url::Url;
 use veilid_core::{
     PublicKey, SecretKey, RecordKey, CryptoSystem, DHTRecordDescriptor,
-    DHTSchema, KeyPair, RoutingContext, SetDHTValueOptions, SharedSecret, Target, VeilidAPI, VeilidAppCall,
+    DHTSchema, KeyPair, RouteId, RoutingContext, SetDHTValueOptions, SharedSecret, Target, VeilidAPI, VeilidAppCall,
     VeilidUpdate, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::tunnels::OnNewRouteCallback;
@@ -75,6 +76,15 @@ pub struct RemoveGroupResponse {
 pub struct RpcService {
     backend: Backend,
     descriptor: RpcServiceDescriptor,
+    // RPC has its own private route, distinct from the tunnel's route used by
+    // veilid-iroh-blobs. Both subscribe to the same VeilidUpdate broadcast, so
+    // we filter incoming AppCalls by route_id to avoid racing the tunnel
+    // listener (which since v0.3.4 actively replies InvalidFormat to anything
+    // it can't parse as a tunnel frame).
+    //
+    // Wrapped in Arc<RwLock<_>> because the route can be rebuilt at runtime
+    // when veilid notifies us via VeilidUpdate::RouteChange that ours died.
+    route_id: Arc<RwLock<RouteId>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -133,33 +143,25 @@ impl RpcClient {
         request: &T,
         message_type: u8,
     ) -> Result<R> {
-        // Serialize the request
         let message = serde_cbor::to_vec(request)?;
 
-        // Get the route ID blob and target
         let blob = self.descriptor.get_route_id_blob().await?;
         let route_id = self.veilid.import_remote_private_route(blob)?;
         let target = Target::RouteId(route_id);
 
-        // Prefix the message type byte
         let mut payload = vec![message_type];
         payload.extend_from_slice(&message);
 
-        // Send the app call and wait for the response
         let response = self.routing_context.app_call(target, payload).await?;
 
-        // Ensure the response is not empty
         if response.is_empty() {
             return Err(anyhow!("Empty response received from RPC call"));
         }
 
-        // Extract the message type byte and payload
         let response_message_type = response[0];
         let payload = &response[1..];
 
-        // Check the response message type
         if response_message_type == MESSAGE_TYPE_ERROR {
-            // Parse and handle an error response
             let rpc_response: RpcResponse<()> = serde_cbor::from_slice(payload)?;
             if let Some(err) = rpc_response.error {
                 return Err(anyhow!("RPC Error: {err}"));
@@ -174,15 +176,12 @@ impl RpcClient {
             ));
         }
 
-        // Parse the response payload into RpcResponse
         let rpc_response: RpcResponse<R> = serde_cbor::from_slice(payload)?;
 
-        // Handle success responses
         if let Some(data) = rpc_response.success {
             return Ok(data);
         }
 
-        // If neither success nor error is present, the response is invalid
         Err(anyhow!(
             "RPC Response is missing both success and error fields"
         ))
@@ -265,7 +264,6 @@ impl RpcServiceDescriptor {
         let mut url = Url::parse(format!("{PROTOCOL_SCHEME}:?").as_str()).unwrap();
 
         url.query_pairs_mut()
-            // Include the record encryption key in the encoded DHT key.
             .append_pair(URL_DHT_KEY, self.get_id().ref_value().encode().as_str())
             .append_pair(
                 URL_ENCRYPTION_KEY,
@@ -282,10 +280,10 @@ impl RpcServiceDescriptor {
             .append_key_only("rpc");
 
         let url_string = url.to_string();
-        // Avoid logging secrets in URLs (pk/sk/enc).
         info!("Descriptor URL generated (redacted)");
         Ok(url_string)
     }
+
     pub async fn get_route_id_blob(&self) -> Result<Vec<u8>> {
         let value = self
             .routing_context
@@ -298,7 +296,6 @@ impl RpcServiceDescriptor {
     }
 
     pub async fn update_route_on_dht(&self, route_id_blob: Vec<u8>) -> Result<()> {
-        // Set the root hash in the DHT record
         self.routing_context
             .set_dht_value(
                 self.dht_record.key().clone(),
@@ -349,30 +346,37 @@ impl RpcService {
             dht_record,
         };
 
-        let updatable_descriptor = descriptor.clone();
-
-        let on_new_route_callback: OnNewRouteCallback = Arc::new(move |route_id, route_id_blob| {
-            let updatable_descriptor = updatable_descriptor.clone();
-
-            tokio::spawn(async move {
-                if let Err(err) = updatable_descriptor
-                    .update_route_on_dht(route_id_blob)
-                    .await
-                {
-                    error!(
-                        "Unable to update route after rebuild for RPC service: {err}"
-                    );
-                }
-            });
-        });
-
-        let route_id_blob = backend.get_route_id_blob().await?;
+        // Allocate a private route dedicated to RPC traffic. This MUST NOT be
+        // the same route the tunnel manager owns; otherwise both update
+        // listeners would race to call app_call_reply for every incoming
+        // AppCall and the tunnel's InvalidFormat reply would clobber ours.
+        let (route_id, route_id_blob) = make_route(&veilid).await?;
         descriptor.update_route_on_dht(route_id_blob).await?;
 
         Ok(RpcService {
             backend,
             descriptor,
+            route_id: Arc::new(RwLock::new(route_id)),
         })
+    }
+
+    /// Rebuild our private route after veilid reports it dead, and re-publish
+    /// the new blob to our DHT subkey so clients can pick it up on their next
+    /// fetch.
+    async fn rebuild_route(&self) -> Result<()> {
+        let veilid = self
+            .backend
+            .get_veilid_api()
+            .await
+            .ok_or_else(|| anyhow!("Veilid API not available"))?;
+
+        let (new_route_id, new_route_blob) = make_route(&veilid).await?;
+        self.descriptor
+            .update_route_on_dht(new_route_blob)
+            .await?;
+        *self.route_id.write().await = new_route_id;
+        info!("RPC private route rebuilt and re-published to DHT");
+        Ok(())
     }
 
     pub fn get_descriptor_url(&self) -> Result<String> {
@@ -381,34 +385,31 @@ impl RpcService {
 
     // Start listening for AppCall events.
     pub async fn start_update_listener(&self) -> Result<()> {
-        // Subscribe to updates from the backend
         let mut update_rx = self
             .backend
             .subscribe_updates()
             .await
             .ok_or_else(|| anyhow!("Failed to subscribe to updates"))?;
 
-        // Listen for incoming updates and handle AppCall
         loop {
             match update_rx.recv().await {
-                Ok(update) => {
-                    if let VeilidUpdate::AppCall(app_call) = update {
-                        let app_call_clone = app_call.clone();
+                Ok(VeilidUpdate::AppCall(app_call)) => {
+                    let app_call_clone = app_call.clone();
 
-                        if let Err(e) = self.handle_app_call(*app_call).await {
-                            error!("Error processing AppCall: {}", e);
+                    if let Err(e) = self.handle_app_call(*app_call).await {
+                        error!("Error processing AppCall: {}", e);
 
-                            // Wrap the error in RpcResponse and send it
+                        // Only reply with an error if the call was actually
+                        // for our route; otherwise we'd be replying to
+                        // tunnel calls and racing the tunnel listener.
+                        if self.is_for_us(&app_call_clone).await {
                             let error_response: RpcResponse<()> = RpcResponse {
                                 success: None,
                                 error: Some(e.to_string()),
                             };
+                            let call_id: u64 = app_call_clone.id().into();
                             if let Err(err) = self
-                                .send_response(
-                                    app_call_clone.id().into(),
-                                    MESSAGE_TYPE_ERROR,
-                                    &error_response,
-                                )
+                                .send_response(call_id, MESSAGE_TYPE_ERROR, &error_response)
                                 .await
                             {
                                 error!("Failed to send error response: {}", err);
@@ -416,6 +417,16 @@ impl RpcService {
                         }
                     }
                 }
+                Ok(VeilidUpdate::RouteChange(rc)) => {
+                    let our_route = self.route_id.read().await.clone();
+                    if rc.dead_routes.contains(&our_route) {
+                        warn!("RPC private route {:?} died; rebuilding", our_route);
+                        if let Err(err) = self.rebuild_route().await {
+                            error!("Failed to rebuild RPC private route: {err}");
+                        }
+                    }
+                }
+                Ok(_) => {}
                 Err(RecvError::Lagged(count)) => {
                     error!("Missed {} updates", count);
                 }
@@ -429,8 +440,26 @@ impl RpcService {
         Ok(())
     }
 
+    /// Returns true iff the AppCall arrived on this RPC service's current
+    /// private route. AppCalls for the tunnel's route (or with no route at
+    /// all) belong to veilid-iroh-blobs and we must ignore them.
+    async fn is_for_us(&self, app_call: &VeilidAppCall) -> bool {
+        match app_call.route_id() {
+            Some(rid) => rid == &*self.route_id.read().await,
+            None => false,
+        }
+    }
+
     async fn handle_app_call(&self, app_call: VeilidAppCall) -> Result<()> {
-        let call_id = app_call.id();
+        if !self.is_for_us(&app_call).await {
+            debug!(
+                "Ignoring AppCall on foreign route_id={:?}",
+                app_call.route_id()
+            );
+            return Ok(());
+        }
+
+        let call_id: u64 = app_call.id().into();
         let message = app_call.message();
 
         if message.is_empty() {
@@ -438,7 +467,7 @@ impl RpcService {
                 success: None,
                 error: Some("Empty message".to_string()),
             };
-            self.send_response(call_id.into(), MESSAGE_TYPE_ERROR, &error_response)
+            self.send_response(call_id, MESSAGE_TYPE_ERROR, &error_response)
                 .await?;
             return Err(anyhow!("Empty message"));
         }
@@ -446,22 +475,24 @@ impl RpcService {
         let message_type_byte = message[0];
         let payload = &message[1..];
 
+        info!("Handling RPC call: type={}", message_type_byte);
+
         match message_type_byte {
             MESSAGE_TYPE_JOIN_GROUP => {
                 let request: JoinGroupRequest = serde_cbor::from_slice(payload)?;
                 let response = self.join_group(request).await;
-                self.send_response(call_id.into(), MESSAGE_TYPE_JOIN_GROUP, &response)
+                self.send_response(call_id, MESSAGE_TYPE_JOIN_GROUP, &response)
                     .await?;
             }
             MESSAGE_TYPE_LIST_GROUPS => {
                 let response = self.list_groups().await;
-                self.send_response(call_id.into(), MESSAGE_TYPE_LIST_GROUPS, &response)
+                self.send_response(call_id, MESSAGE_TYPE_LIST_GROUPS, &response)
                     .await?;
             }
             MESSAGE_TYPE_REMOVE_GROUP => {
                 let request: RemoveGroupRequest = serde_cbor::from_slice(payload)?;
                 let response = self.remove_group(request).await;
-                self.send_response(call_id.into(), MESSAGE_TYPE_REMOVE_GROUP, &response)
+                self.send_response(call_id, MESSAGE_TYPE_REMOVE_GROUP, &response)
                     .await?;
             }
             _ => {
@@ -470,7 +501,7 @@ impl RpcService {
                     success: None,
                     error: Some("Unknown message type".to_string()),
                 };
-                self.send_response(call_id.into(), MESSAGE_TYPE_ERROR, &error_response)
+                self.send_response(call_id, MESSAGE_TYPE_ERROR, &error_response)
                     .await?;
             }
         }
@@ -486,6 +517,11 @@ impl RpcService {
     ) -> Result<()> {
         let mut response_buf = vec![message_type];
         let payload = serde_cbor::to_vec(response)?;
+        info!(
+            "Sending RPC response: type={}, payload_len={}",
+            message_type,
+            payload.len()
+        );
         response_buf.extend_from_slice(&payload);
 
         self.backend
@@ -507,10 +543,8 @@ impl RpcService {
 
     pub async fn join_group(&self, request: JoinGroupRequest) -> RpcResponse<JoinGroupResponse> {
         let group_url = request.group_url;
-        // Avoid logging secrets in URLs (pk/sk/enc).
         info!("Joining group with URL (redacted)");
 
-        // Use the backend to join the group from the provided URL
         let backend = self.backend.clone();
 
         match backend.join_from_url(&group_url).await {
@@ -587,7 +621,13 @@ impl RpcService {
             }
         };
 
-        let group_key = RecordKey::new(CRYPTO_KIND_VLD0, veilid_core::BareRecordKey::new(veilid_core::BareOpaqueRecordKey::from(&group_bytes[..]), None));
+        let group_key = RecordKey::new(
+            CRYPTO_KIND_VLD0,
+            veilid_core::BareRecordKey::new(
+                veilid_core::BareOpaqueRecordKey::from(&group_bytes[..]),
+                None,
+            ),
+        );
 
         match backend.close_group(group_key).await {
             Ok(_) => RpcResponse {
@@ -606,17 +646,13 @@ impl RpcService {
     pub async fn replicate_known_groups(&self) -> Result<()> {
         info!("Replicating all known groups...");
 
-        // Fetch all known group IDs from the backend
         let group_ids = self.backend.list_known_group_ids().await?;
 
-        // Iterate over each group and replicate it
         for group_id in group_ids {
             info!("Replicating group with ID: {:?}", group_id);
 
-            // Retrieve the group object
             let group = self.backend.get_group(&group_id).await?;
 
-            // Fetch and replicate all repositories within the group
             for repo_key in group.list_repos().await {
                 info!("Processing repository with crypto key: {:?}", repo_key);
 
@@ -638,7 +674,6 @@ async fn replicate_repo(group: &Group, repo: &Repo) -> Result<()> {
         }
     }
 
-    // List the files in the repo
     let files = repo.list_files().await?;
 
     for file_name in files {
@@ -646,11 +681,9 @@ async fn replicate_repo(group: &Group, repo: &Repo) -> Result<()> {
 
         let file_hash = repo.get_file_hash(&file_name).await?;
 
-        // If the repo is not writable and the file hash is not found in the group, attempt to download it.
         if !repo.can_write() && !group.has_hash(&file_hash).await? {
             download(group, &file_hash).await?;
         }
-        // Attempt to retrieve the file using download_file_from
         if let Ok(route_id_blob) = repo.get_route_id_blob().await {
             group
                 .iroh_blobs
