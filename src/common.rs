@@ -8,9 +8,10 @@ use tokio::sync::broadcast::{self, Receiver};
 use tracing::{error, info, warn};
 use url::Url;
 use veilid_core::{
-    PrivateSpec, PublicKey, SecretKey, RecordKey, CryptoSystem, DHTRecordDescriptor, KeyPair, Nonce,
-    ProtectedStore, RouteId, RoutingContext, Sequencing, SetDHTValueOptions, SharedSecret, Stability, UpdateCallback,
-    VeilidAPI, VeilidAPIError, VeilidConfig, VeilidUpdate, CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
+    CryptoSystem, DHTRecordDescriptor, KeyPair, Nonce, PrivateSpec, ProtectedStore, PublicKey,
+    RecordKey, RouteId, RoutingContext, SecretKey, Sequencing, SetDHTValueOptions, SharedSecret,
+    Stability, UpdateCallback, VeilidAPI, VeilidAPIError, VeilidConfig, VeilidUpdate,
+    CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
 };
 
 use crate::constants::ROUTE_ID_DHT_KEY;
@@ -113,12 +114,15 @@ pub async fn init_veilid(
             }
         }
         Err(anyhow!("Update channel closed before network ready"))
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok(())) => Ok((veilid, rx)),
         Ok(Err(e)) => Err(e),
-        Err(_) => Err(anyhow!("Timeout waiting for Veilid network to become ready")),
+        Err(_) => Err(anyhow!(
+            "Timeout waiting for Veilid network to become ready"
+        )),
     }
 }
 

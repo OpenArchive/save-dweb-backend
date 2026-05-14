@@ -115,7 +115,9 @@ async fn init_veilid_with_logging(
     Ok((veilid, rx))
 }
 
-async fn read_all(mut rx: tokio::sync::mpsc::Receiver<std::io::Result<bytes::Bytes>>) -> Result<Vec<u8>> {
+async fn read_all(
+    mut rx: tokio::sync::mpsc::Receiver<std::io::Result<bytes::Bytes>>,
+) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     while let Some(item) = rx.recv().await {
         let chunk = item.context("stream chunk error")?;
@@ -139,7 +141,9 @@ async fn main() -> Result<()> {
         p.push(format!("save-dweb-veilid-probe-{}", now_millis()));
         p
     });
-    let namespace = args.namespace.unwrap_or_else(|| unique_namespace("save-dweb-probe"));
+    let namespace = args
+        .namespace
+        .unwrap_or_else(|| unique_namespace("save-dweb-probe"));
 
     tokio::fs::create_dir_all(&base_dir)
         .await
@@ -167,8 +171,9 @@ async fn main() -> Result<()> {
 
     if !args.skip_route {
         let t = tokio::time::Instant::now();
-        let (_route_id, _route_blob) =
-            save_dweb_backend::common::make_route(&veilid_api).await.context("make_route failed")?;
+        let (_route_id, _route_blob) = save_dweb_backend::common::make_route(&veilid_api)
+            .await
+            .context("make_route failed")?;
         info!("probe: make_route ok in {:?}", t.elapsed());
     }
 
@@ -179,22 +184,33 @@ async fn main() -> Result<()> {
 
     let t_backend = tokio::time::Instant::now();
     let backend = save_dweb_backend::backend::Backend::from_dependencies(
-        &base_dir,
-        veilid_api,
-        update_rx,
-        store,
+        &base_dir, veilid_api, update_rx, store,
     )
     .await
     .context("Backend::from_dependencies failed")?;
-    info!("probe: Backend::from_dependencies ok in {:?}", t_backend.elapsed());
+    info!(
+        "probe: Backend::from_dependencies ok in {:?}",
+        t_backend.elapsed()
+    );
 
     let t_group = tokio::time::Instant::now();
-    let mut group = backend.create_group().await.context("create_group failed")?;
-    info!("probe: create_group ok in {:?} (group_id={:?})", t_group.elapsed(), group.id());
+    let mut group = backend
+        .create_group()
+        .await
+        .context("create_group failed")?;
+    info!(
+        "probe: create_group ok in {:?} (group_id={:?})",
+        t_group.elapsed(),
+        group.id()
+    );
 
     let t_repo = tokio::time::Instant::now();
     let repo = group.create_repo().await.context("create_repo failed")?;
-    info!("probe: create_repo ok in {:?} (repo_id={:?})", t_repo.elapsed(), repo.id());
+    info!(
+        "probe: create_repo ok in {:?} (repo_id={:?})",
+        t_repo.elapsed(),
+        repo.id()
+    );
 
     // Local upload + local read-back (no P2P). This tells us if iroh/store/encryption is slow.
     let file_name = "probe.txt";
@@ -212,7 +228,11 @@ async fn main() -> Result<()> {
         .await
         .context("get_stream_from_hash failed")?;
     let got = read_all(stream).await.context("readback failed")?;
-    info!("probe: readback ok in {:?} (bytes={})", t_read.elapsed(), got.len());
+    info!(
+        "probe: readback ok in {:?} (bytes={})",
+        t_read.elapsed(),
+        got.len()
+    );
     if got != payload {
         warn!(
             "probe: readback mismatch: expected {} bytes, got {} bytes",

@@ -23,8 +23,8 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use url::Url;
 use veilid_core::{
-    PublicKey, SecretKey, RecordKey, CryptoSystem, DHTRecordDescriptor,
-    DHTSchema, KeyPair, RouteId, RoutingContext, SetDHTValueOptions, SharedSecret, Target, VeilidAPI, VeilidAppCall,
+    CryptoSystem, DHTRecordDescriptor, DHTSchema, KeyPair, PublicKey, RecordKey, RouteId,
+    RoutingContext, SecretKey, SetDHTValueOptions, SharedSecret, Target, VeilidAPI, VeilidAppCall,
     VeilidUpdate, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::tunnels::OnNewRouteCallback;
@@ -109,8 +109,10 @@ pub fn parse_url_for_rpc(url_string: &str) -> Result<RpcKeys> {
         .map_err(|_| anyhow!("Missing 'enc' key in the URL"))?;
     let owner_public_key = crate::backend::public_key_from_query(&url, URL_PUBLIC_KEY)
         .map_err(|_| anyhow!("Missing 'pk' key in the URL"))?;
-    let owner_secret_key = Some(crate::backend::secret_key_from_query(&url, URL_SECRET_KEY)
-        .map_err(|_| anyhow!("Missing 'sk' key in the URL"))?);
+    let owner_secret_key = Some(
+        crate::backend::secret_key_from_query(&url, URL_SECRET_KEY)
+            .map_err(|_| anyhow!("Missing 'sk' key in the URL"))?,
+    );
 
     Ok(RpcKeys {
         dht_key,
@@ -259,7 +261,9 @@ impl RpcServiceDescriptor {
     }
 
     pub fn get_url(&self) -> Result<String> {
-        let owner_secret = self.dht_record.owner_secret()
+        let owner_secret = self
+            .dht_record
+            .owner_secret()
             .ok_or_else(|| anyhow!("Cannot generate URL: no owner secret"))?;
         let mut url = Url::parse(format!("{PROTOCOL_SCHEME}:?").as_str()).unwrap();
 
@@ -371,9 +375,7 @@ impl RpcService {
             .ok_or_else(|| anyhow!("Veilid API not available"))?;
 
         let (new_route_id, new_route_blob) = make_route(&veilid).await?;
-        self.descriptor
-            .update_route_on_dht(new_route_blob)
-            .await?;
+        self.descriptor.update_route_on_dht(new_route_blob).await?;
         *self.route_id.write().await = new_route_id;
         info!("RPC private route rebuilt and re-published to DHT");
         Ok(())
