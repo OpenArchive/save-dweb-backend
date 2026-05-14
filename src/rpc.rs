@@ -364,9 +364,9 @@ impl RpcService {
         })
     }
 
-    /// Rebuild our private route after veilid reports it dead, and re-publish
-    /// the new blob to our DHT subkey so clients can pick it up on their next
-    /// fetch.
+    /// Rebuild our private route after veilid reports it dead. Update the local
+    /// route_id first so incoming calls are immediately accepted, then publish
+    /// the new blob to DHT so clients discover it on their next fetch.
     async fn rebuild_route(&self) -> Result<()> {
         let veilid = self
             .backend
@@ -375,8 +375,8 @@ impl RpcService {
             .ok_or_else(|| anyhow!("Veilid API not available"))?;
 
         let (new_route_id, new_route_blob) = make_route(&veilid).await?;
-        self.descriptor.update_route_on_dht(new_route_blob).await?;
         *self.route_id.write().await = new_route_id;
+        self.descriptor.update_route_on_dht(new_route_blob).await?;
         info!("RPC private route rebuilt and re-published to DHT");
         Ok(())
     }
