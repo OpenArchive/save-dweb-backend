@@ -1,15 +1,31 @@
 [package]
 name = "save-dweb-backend"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
+
+[features]
+default = []
+# Builds the `veilid-probe` diagnostic binary. Off by default so downstream
+# consumers don't pull the probe into their build graph. Enable with
+# `cargo build --features probe --bin veilid-probe`.
+probe = []
+
+[[bin]]
+name = "veilid-probe"
+path = "src/bin/veilid-probe.rs"
+required-features = ["probe"]
 
 [dependencies]
 iroh = "0.24.0"
 iroh-blobs = "0.24.0"
-veilid-core = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.2" }
-veilid-tools = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.2" }
-# v0.3.4 matches Veilid 0.5.2 API
-veilid-iroh-blobs = { git = "https://github.com/RangerMauve/veilid-iroh-blobs", tag = "v0.3.2" }
+# Pinned because veilid-core 0.5.3's transitive resolver tree breaks with
+# hickory-resolver 0.25.3+. Drop this pin once veilid-core relaxes its constraint.
+hickory-resolver = "=0.25.2"
+veilid-core = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.3" }
+veilid-tools = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.3" }
+# v0.3.4 matches Veilid 0.5.3 API (improved DHT reliability and bootstrap,
+# stricter tunnel app-call validation -- see RangerMauve/veilid-iroh-blobs#12)
+veilid-iroh-blobs = { git = "https://github.com/RangerMauve/veilid-iroh-blobs", tag = "v0.3.4" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 xdg = "2.4"
@@ -31,8 +47,8 @@ hex = "0.4.3"
 rand = "0.8.5"
 base64 = "0.22.1"
 
-# Patch iroh crates to relax hickory-resolver pin for veilid-core 0.5.2 compat
-# All iroh workspace crates must come from the same source to avoid duplicate type errors
+# Patch iroh crates to relax hickory-resolver pin for veilid-core 0.5.3 compat.
+# All iroh workspace crates must come from the same source to avoid duplicate type errors.
 [patch.crates-io]
 iroh = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
 iroh-net = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }

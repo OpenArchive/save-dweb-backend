@@ -12,15 +12,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
-use tokio::sync::Mutex;
 use tokio::sync::broadcast;
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use url::Url;
 use veilid_core::{
-    PublicKey, SecretKey, RecordKey, BareRecordKey, CryptoSystem,
-    DHTSchema, KeyPair, ProtectedStore, RoutingContext, SharedSecret,
-    UpdateCallback, VeilidAPI, VeilidAPIError, VeilidConfig, VeilidConfigProtectedStore, VeilidUpdate,
-    CRYPTO_KIND_VLD0,
+    BareRecordKey, CryptoSystem, DHTSchema, KeyPair, ProtectedStore, PublicKey, RecordKey,
+    RoutingContext, SecretKey, SharedSecret, UpdateCallback, VeilidAPI, VeilidAPIError,
+    VeilidConfig, VeilidConfigProtectedStore, VeilidUpdate, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 use veilid_iroh_blobs::tunnels::{OnNewRouteCallback, OnRouteDisconnectedCallback};
@@ -34,7 +33,7 @@ pub struct BackendInner {
     path: PathBuf,
     veilid_api: Option<VeilidAPI>,
     update_rx: Option<broadcast::Receiver<VeilidUpdate>>,
-    groups: HashMap<String, Box<Group>>,  // Key is hex-encoded opaque value for stable lookups
+    groups: HashMap<String, Box<Group>>, // Key is hex-encoded opaque value for stable lookups
     pub iroh_blobs: Option<VeilidIrohBlobs>,
     on_new_route_callback: Option<OnNewRouteCallback>,
     initialized: bool,
@@ -202,7 +201,9 @@ impl Backend {
             #[cfg(not(test))]
             {
                 drop(inner);
-                return Err(anyhow!("Veilid already initialized. Call stop() first, then start()."));
+                return Err(anyhow!(
+                    "Veilid already initialized. Call stop() first, then start()."
+                ));
             }
         }
         info!("Starting on {}", inner.path.display());
@@ -322,7 +323,7 @@ impl Backend {
                 "Backend not initialized. Ensure start() has been called and completed successfully before joining groups."
             ));
         }
-        
+
         // Check if group is already cached with a writable repo
         let cache_key = group_cache_key(&keys.id);
         if let Some(cached_group) = inner.groups.get(&cache_key) {
@@ -331,7 +332,7 @@ impl Backend {
                 return Ok(cached_group.clone());
             }
         }
-        
+
         info!("Joining group - backend is initialized");
         let iroh_blobs = inner.iroh_blobs()?;
         let veilid = inner.veilid()?;
@@ -401,10 +402,10 @@ impl Backend {
 
         // Try to load existing repo from disk
         group.try_load_repo_from_disk().await;
-        
+
         // Load repos from other peers in the group
         group.load_repos_from_dht().await?;
-        
+
         // If we don't have our own repo, create one automatically
         // This allows the device to participate in the group and upload files
         // Check for a writable repo after BOTH disk and DHT loading complete
@@ -418,7 +419,9 @@ impl Backend {
             }
         }
 
-        inner.groups.insert(group_cache_key(&group.id()), Box::new(group.clone()));
+        inner
+            .groups
+            .insert(group_cache_key(&group.id()), Box::new(group.clone()));
 
         inner.save_known_group_ids().await?;
 
@@ -427,14 +430,14 @@ impl Backend {
 
     pub async fn create_group(&self) -> Result<Group> {
         let mut inner = self.inner.lock().await;
-        
+
         // Check initialization state before proceeding
         if !inner.is_initialized() {
             return Err(anyhow!(
                 "Backend not initialized. Ensure start() has been called and completed successfully before creating groups."
             ));
         }
-        
+
         info!("Creating group - backend is initialized");
         let iroh_blobs = inner.iroh_blobs()?;
         let veilid = inner.veilid()?;
@@ -473,7 +476,9 @@ impl Backend {
         .await
         .map_err(|e| anyhow!(e))?;
 
-        inner.groups.insert(group_cache_key(&group.id()), Box::new(group.clone()));
+        inner
+            .groups
+            .insert(group_cache_key(&group.id()), Box::new(group.clone()));
 
         inner.save_known_group_ids().await?;
 
@@ -492,14 +497,14 @@ impl Backend {
         }
 
         let mut inner = self.inner.lock().await;
-        
+
         // Check initialization state before proceeding
         if !inner.is_initialized() {
             return Err(anyhow!(
                 "Backend not initialized. Ensure start() has been called and completed successfully."
             ));
         }
-        
+
         let iroh_blobs = inner.iroh_blobs()?;
         let veilid = inner.veilid()?;
 
@@ -522,10 +527,8 @@ impl Backend {
         let record_key = record_key.clone();
 
         let owner = owner_secret.map(|secret| {
-            let bare_keypair = veilid_core::BareKeyPair::new(
-                owner_key.into_value(),
-                secret.into_value(),
-            );
+            let bare_keypair =
+                veilid_core::BareKeyPair::new(owner_key.into_value(), secret.into_value());
             KeyPair::new(CRYPTO_KIND_VLD0, bare_keypair)
         });
 
@@ -545,7 +548,9 @@ impl Backend {
         group.try_load_repo_from_disk().await;
         group.load_repos_from_dht().await?;
 
-        inner.groups.insert(group_cache_key(&group.id()), Box::new(group.clone()));
+        inner
+            .groups
+            .insert(group_cache_key(&group.id()), Box::new(group.clone()));
 
         drop(inner);
 
@@ -598,7 +603,10 @@ impl Backend {
     pub async fn invalidate_group_cache(&self, record_key: &RecordKey) {
         let mut inner = self.inner.lock().await;
         inner.groups.remove(&group_cache_key(record_key));
-        info!("Invalidated cache for group {}", hex::encode(record_key.opaque().ref_value()));
+        info!(
+            "Invalidated cache for group {}",
+            hex::encode(record_key.opaque().ref_value())
+        );
     }
 
     /// Force refresh a group's repos from DHT
@@ -686,7 +694,10 @@ pub fn public_key_from_query(url: &Url, key: &str) -> Result<PublicKey> {
     let bytes = hex::decode(value)?;
     let mut key_vec: [u8; 32] = [0; 32];
     key_vec.copy_from_slice(bytes.as_slice());
-    Ok(PublicKey::new(CRYPTO_KIND_VLD0, veilid_core::BarePublicKey::from(&key_vec[..])))
+    Ok(PublicKey::new(
+        CRYPTO_KIND_VLD0,
+        veilid_core::BarePublicKey::from(&key_vec[..]),
+    ))
 }
 
 pub fn secret_key_from_query(url: &Url, key: &str) -> Result<SecretKey> {
@@ -694,7 +705,10 @@ pub fn secret_key_from_query(url: &Url, key: &str) -> Result<SecretKey> {
     let bytes = hex::decode(value)?;
     let mut key_vec: [u8; 32] = [0; 32];
     key_vec.copy_from_slice(bytes.as_slice());
-    Ok(SecretKey::new(CRYPTO_KIND_VLD0, veilid_core::BareSecretKey::from(&key_vec[..])))
+    Ok(SecretKey::new(
+        CRYPTO_KIND_VLD0,
+        veilid_core::BareSecretKey::from(&key_vec[..]),
+    ))
 }
 
 pub fn shared_secret_from_query(url: &Url, key: &str) -> Result<SharedSecret> {
@@ -702,7 +716,10 @@ pub fn shared_secret_from_query(url: &Url, key: &str) -> Result<SharedSecret> {
     let bytes = hex::decode(value)?;
     let mut key_vec: [u8; 32] = [0; 32];
     key_vec.copy_from_slice(bytes.as_slice());
-    Ok(SharedSecret::new(CRYPTO_KIND_VLD0, veilid_core::BareSharedSecret::from(&key_vec[..])))
+    Ok(SharedSecret::new(
+        CRYPTO_KIND_VLD0,
+        veilid_core::BareSharedSecret::from(&key_vec[..]),
+    ))
 }
 
 pub fn parse_url(url_string: &str) -> Result<CommonKeypair> {

@@ -15,7 +15,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, info, warn};
 use veilid_core::{
-    PublicKey, SecretKey, RecordKey, DHTRecordDescriptor, Nonce, ProtectedStore, RoutingContext,
+    DHTRecordDescriptor, Nonce, ProtectedStore, PublicKey, RecordKey, RoutingContext, SecretKey,
     SetDHTValueOptions, SharedSecret, Target, VeilidAPI, VeilidUpdate, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
@@ -68,7 +68,7 @@ impl Repo {
 
     pub async fn update_route_on_dht(&self) -> Result<()> {
         let route_id_blob = self.iroh_blobs.route_id_blob().await;
-        
+
         info!(
             "Updating route ID on DHT for repo {} (route blob size: {} bytes)",
             hex::encode(self.id().opaque().ref_value()),
@@ -106,7 +106,10 @@ impl Repo {
     pub async fn get_route_id_blob(&self) -> Result<Vec<u8>> {
         if self.can_write() {
             let blob = self.iroh_blobs.route_id_blob().await;
-            info!("Retrieved route ID blob for writable repo {}", hex::encode(self.id().opaque().ref_value()));
+            info!(
+                "Retrieved route ID blob for writable repo {}",
+                hex::encode(self.id().opaque().ref_value())
+            );
             return Ok(blob);
         }
 
@@ -115,15 +118,18 @@ impl Repo {
             hex::encode(self.dht_record.key().opaque().ref_value()),
             ROUTE_SUBKEY
         );
-        
+
         let value = self
             .routing_context
             .get_dht_value(self.dht_record.key().clone(), ROUTE_SUBKEY, true)
             .await?;
-        
+
         let value = match value {
             Some(v) => {
-                info!("Route ID blob found in DHT for repo {}", hex::encode(self.id().opaque().ref_value()));
+                info!(
+                    "Route ID blob found in DHT for repo {}",
+                    hex::encode(self.id().opaque().ref_value())
+                );
                 v
             }
             None => {
@@ -170,8 +176,7 @@ impl Repo {
         let repo_id = hex::encode(self.dht_record.key().opaque().ref_value());
         info!(
             "Getting hash from DHT for repo {} subkey {}",
-            repo_id,
-            HASH_SUBKEY
+            repo_id, HASH_SUBKEY
         );
 
         // Retry up to 5 times with exponential backoff
@@ -289,7 +294,11 @@ impl Repo {
         match self.iroh_blobs.collection_hash(&collection_name).await {
             Ok(collection_hash) => {
                 // Collection exists with new naming, return the hash
-                info!("Collection found for {}: {}", collection_name, collection_hash.to_hex());
+                info!(
+                    "Collection found for {}: {}",
+                    collection_name,
+                    collection_hash.to_hex()
+                );
                 Ok(collection_hash)
             }
             Err(_) => {
@@ -297,7 +306,10 @@ impl Repo {
                 let legacy_name = self.get_name().await.ok();
                 if let Some(old_name) = legacy_name {
                     if let Ok(old_hash) = self.iroh_blobs.collection_hash(&old_name).await {
-                        info!("Migrating collection from '{}' to '{}'", old_name, collection_name);
+                        info!(
+                            "Migrating collection from '{}' to '{}'",
+                            old_name, collection_name
+                        );
                         // Note: Can't rename in Iroh, but we use the old hash
                         // Just update DHT with the existing hash
                         if let Err(e) = self.update_hash_on_dht(&old_hash).await {
@@ -316,17 +328,24 @@ impl Repo {
                     }
                     Err(e) => {
                         error!("Failed to create collection: {e:?}");
-                        return Err(anyhow!("Failed to create collection {collection_name}: {e}"));
+                        return Err(anyhow!(
+                            "Failed to create collection {collection_name}: {e}"
+                        ));
                     }
                 };
 
                 // Update the DHT with the new collection hash
                 if let Err(e) = self.update_collection_on_dht().await {
                     error!("Failed to update DHT with new collection hash: {e:?}");
-                    return Err(anyhow!("Failed to update DHT with collection hash for {collection_name}: {e}"));
+                    return Err(anyhow!(
+                        "Failed to update DHT with collection hash for {collection_name}: {e}"
+                    ));
                 }
 
-                info!("DHT updated with new collection hash: {}", new_hash.to_hex());
+                info!(
+                    "DHT updated with new collection hash: {}",
+                    new_hash.to_hex()
+                );
                 // Return the new collection hash
                 Ok(new_hash)
             }
@@ -423,7 +442,7 @@ impl Repo {
         let mut buffer = Vec::with_capacity(4 + 1 + nonce.bytes().len() + encrypted_chunk.len());
         buffer.extend_from_slice(MAGIC);
         buffer.push(VERSION);
-        buffer.extend_from_slice(nonce.bytes());
+        buffer.extend_from_slice(&nonce.bytes());
         buffer.extend_from_slice(&encrypted_chunk);
 
         Ok(buffer)
@@ -470,7 +489,11 @@ impl Repo {
 
         // Encrypt file data before uploading
         let encrypted_data = self.encrypt_file_data(&data_to_upload)?;
-        info!("File encrypted: {} bytes → {} bytes", data_to_upload.len(), encrypted_data.len());
+        info!(
+            "File encrypted: {} bytes → {} bytes",
+            data_to_upload.len(),
+            encrypted_data.len()
+        );
 
         // Ensure the collection exists before uploading
         let collection_hash = self.get_or_create_collection().await?;
@@ -478,9 +501,7 @@ impl Repo {
         // Use the stable collection name (namespaced by repo ID)
         let collection_name = self.collection_name();
         let (tx, rx) = mpsc::channel::<std::io::Result<Bytes>>(1);
-        tx.send(Ok(Bytes::from(encrypted_data)))
-            .await
-            .unwrap();
+        tx.send(Ok(Bytes::from(encrypted_data))).await.unwrap();
         drop(tx);
 
         let file_hash = self
@@ -516,15 +537,11 @@ impl Repo {
         self.iroh_blobs
             .persist_collection_with_name(collection_name, &updated_collection_hash)
             .await?;
-        info!(
-            "Collection persisted with new hash: {updated_collection_hash:?}"
-        );
+        info!("Collection persisted with new hash: {updated_collection_hash:?}");
 
         // Step 3: Update the DHT with the new collection hash
         self.update_collection_on_dht().await?;
-        info!(
-            "DHT updated with new collection hash: {updated_collection_hash:?}"
-        );
+        info!("DHT updated with new collection hash: {updated_collection_hash:?}");
 
         Ok(updated_collection_hash)
     }

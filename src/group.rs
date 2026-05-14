@@ -21,9 +21,9 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use url::Url;
 use veilid_core::{
-    PublicKey, SecretKey, RecordKey, DHTRecordDescriptor, DHTReportScope, DHTSchema,
-    KeyPair, ProtectedStore, RoutingContext, SetDHTValueOptions, SharedSecret, ValueSubkeyRangeSet,
-    VeilidAPI, VeilidAPIError, VeilidUpdate, CRYPTO_KIND_VLD0,
+    DHTRecordDescriptor, DHTReportScope, DHTSchema, KeyPair, ProtectedStore, PublicKey, RecordKey,
+    RoutingContext, SecretKey, SetDHTValueOptions, SharedSecret, ValueSubkeyRangeSet, VeilidAPI,
+    VeilidAPIError, VeilidUpdate, CRYPTO_KIND_VLD0,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 
@@ -154,7 +154,7 @@ impl Group {
                     hash.to_hex(),
                     hex::encode(repo.id().opaque().ref_value())
                 );
-                
+
                 if let Ok(route_id_blob) = repo.get_route_id_blob().await {
                     // It's faster to try and fail, than to ask then try
                     // Guard against hung downloads so a single peer doesn't stall the whole request.
@@ -166,7 +166,8 @@ impl Group {
 
                     match result {
                         Ok(Ok(())) => {
-                            info!("Successfully downloaded hash {} from peer {}",
+                            info!(
+                                "Successfully downloaded hash {} from peer {}",
                                 hash.to_hex(),
                                 hex::encode(repo.id().opaque().ref_value())
                             );
@@ -200,7 +201,7 @@ impl Group {
             if attempt < MAX_RETRIES - 1 {
                 let delay_ms = std::cmp::min(
                     INITIAL_DELAY_MS * (1 << attempt), // Exponential backoff
-                    MAX_DELAY_MS
+                    MAX_DELAY_MS,
                 );
                 info!(
                     "All peers failed for hash {}, retrying in {}ms (attempt {}/{})",
@@ -210,7 +211,7 @@ impl Group {
                     MAX_RETRIES
                 );
                 tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-                
+
                 // Refresh peer list in case new peers joined
                 let mut refreshed_repos = self.list_peer_repos().await;
                 if !refreshed_repos.is_empty() {
@@ -271,7 +272,8 @@ impl Group {
     }
 
     pub fn get_url(&self) -> Result<String> {
-        let owner_secret = self.owner_secret()
+        let owner_secret = self
+            .owner_secret()
             .ok_or_else(|| anyhow!("Cannot generate URL: no owner secret"))?;
         let mut url = Url::parse(format!("{PROTOCOL_SCHEME}:?").as_str()).unwrap();
 
@@ -336,7 +338,7 @@ impl Group {
         let repo_key = repo.id().ref_value().encode().into_bytes();
 
         let count = self.dht_repo_count().await? + 1;
-        
+
         info!(
             "Advertising own repo {} to group {} at subkey {}",
             hex::encode(repo.id().opaque().ref_value()),
@@ -394,9 +396,7 @@ impl Group {
                     break;
                 }
                 Err(e) => {
-                    warn!(
-                        "Failed to open DHT record: {e}. Retries left: {retries}"
-                    );
+                    warn!("Failed to open DHT record: {e}. Retries left: {retries}");
                     if retries == 0 {
                         return Err(anyhow!(
                             "Unable to open DHT record, reached max retries: {e}"
@@ -655,18 +655,11 @@ impl Group {
         // Spawn a task that uses only owned data
         tokio::spawn(async move {
             match routing_context
-                .watch_dht_values(
-                    dht_record_key.clone(),
-                    Some(range.clone()),
-                    None,
-                    None,
-                )
+                .watch_dht_values(dht_record_key.clone(), Some(range.clone()), None, None)
                 .await
             {
                 Ok(_) => {
-                    info!(
-                        "DHT watch successfully set on record key {dht_record_key:?}"
-                    );
+                    info!("DHT watch successfully set on record key {dht_record_key:?}");
 
                     loop {
                         if let Ok(change) = routing_context

@@ -8,9 +8,10 @@ use tokio::sync::broadcast::{self, Receiver};
 use tracing::{error, info, warn};
 use url::Url;
 use veilid_core::{
-    PublicKey, SecretKey, RecordKey, CryptoSystem, DHTRecordDescriptor, KeyPair, Nonce,
-    ProtectedStore, RouteId, RoutingContext, Sequencing, SetDHTValueOptions, SharedSecret, Stability, UpdateCallback,
-    VeilidAPI, VeilidAPIError, VeilidConfig, VeilidUpdate, CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
+    CryptoSystem, DHTRecordDescriptor, KeyPair, Nonce, PrivateSpec, ProtectedStore, PublicKey,
+    RecordKey, RouteId, RoutingContext, SecretKey, Sequencing, SetDHTValueOptions, SharedSecret,
+    Stability, UpdateCallback, VeilidAPI, VeilidAPIError, VeilidConfig, VeilidUpdate,
+    CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
 };
 
 use crate::constants::ROUTE_ID_DHT_KEY;
@@ -26,6 +27,10 @@ pub mod test_helpers {
     /// Creates a unique TmpDir and initializes Veilid with a unique namespace
     /// to avoid "Already initialized" errors between test runs.
     pub async fn setup_test_backend(test_name: &str) -> Result<(Backend, TmpDir)> {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .try_init();
+
         let path = TmpDir::new(test_name)
             .await
             .map_err(|e| anyhow!("Failed to create temp directory: {e}"))?;
@@ -51,11 +56,12 @@ pub async fn make_route(veilid: &VeilidAPI) -> Result<(RouteId, Vec<u8>)> {
     while attempt < max_retries {
         attempt += 1;
         let result = veilid
-            .new_custom_private_route(
-                &VALID_CRYPTO_KINDS,
-                Stability::LowLatency,
-                Sequencing::NoPreference,
-            )
+            .new_custom_private_route(PrivateSpec {
+                crypto_kinds: VALID_CRYPTO_KINDS.to_vec(),
+                hop_count: 0,
+                stability: Stability::Reliable,
+                sequencing: Sequencing::PreferOrdered,
+            })
             .await;
 
         if let Ok(route_blob) = result {
@@ -108,12 +114,15 @@ pub async fn init_veilid(
             }
         }
         Err(anyhow!("Update channel closed before network ready"))
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok(())) => Ok((veilid, rx)),
         Ok(Err(e)) => Err(e),
-        Err(_) => Err(anyhow!("Timeout waiting for Veilid network to become ready")),
+        Err(_) => Err(anyhow!(
+            "Timeout waiting for Veilid network to become ready"
+        )),
     }
 }
 
@@ -205,7 +214,7 @@ pub trait DHTEntity {
             .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
         let nonce = crypto_system.random_nonce();
         let mut buffer = Vec::with_capacity(nonce.bytes().len() + data.len());
-        buffer.extend_from_slice(nonce.bytes());
+        buffer.extend_from_slice(&nonce.bytes());
         let encrypted_chunk = crypto_system
             .encrypt_aead(data, &nonce, &self.get_encryption_key(), associated_data)
             .map_err(|e| anyhow!("Failed to encrypt data: {e}"))?;

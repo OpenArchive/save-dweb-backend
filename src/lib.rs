@@ -17,8 +17,7 @@ use crate::common::{CommonKeypair, DHTEntity};
 
 use iroh_blobs::Hash;
 use veilid_core::{
-    PublicKey, SecretKey, RecordKey, VeilidUpdate, CRYPTO_KIND_VLD0,
-    VALID_CRYPTO_KINDS,
+    PublicKey, RecordKey, SecretKey, VeilidUpdate, CRYPTO_KIND_VLD0, VALID_CRYPTO_KINDS,
 };
 use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 
@@ -27,21 +26,21 @@ use serial_test::serial;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rpc::{RpcClient, RpcService};
     use anyhow::anyhow;
     use anyhow::Result;
     use bytes::Bytes;
     use common::init_veilid;
     use common::make_route;
     use common::test_helpers::setup_test_backend;
-    use crate::rpc::{RpcClient, RpcService};
     use futures::StreamExt;
     use std::time::Duration;
+    use tmpdir::TmpDir;
     use tokio::fs;
     use tokio::sync::mpsc;
     use tokio::time::sleep;
     use tokio_stream::wrappers::ReceiverStream;
     use tracing::error;
-    use tmpdir::TmpDir;
 
     #[tokio::test]
     #[serial]
@@ -152,7 +151,10 @@ mod tests {
             .expect("Failed to create base directory");
 
         let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start_with_namespace(Some("known_group_persistence".to_string())).await.expect("Unable to start");
+        backend
+            .start_with_namespace(Some("known_group_persistence".to_string()))
+            .await
+            .expect("Unable to start");
 
         let group = backend
             .create_group()
@@ -167,7 +169,10 @@ mod tests {
 
         backend.stop().await.expect("Unable to stop");
 
-        backend.start_with_namespace(Some("known_group_persistence".to_string())).await.expect("Unable to restart");
+        backend
+            .start_with_namespace(Some("known_group_persistence".to_string()))
+            .await
+            .expect("Unable to restart");
 
         let list = backend.list_groups().await?;
 
@@ -187,7 +192,10 @@ mod tests {
             .expect("Failed to create base directory");
 
         let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start_with_namespace(Some("group_name_persistence".to_string())).await.expect("Unable to start");
+        backend
+            .start_with_namespace(Some("group_name_persistence".to_string()))
+            .await
+            .expect("Unable to start");
 
         let group = backend
             .create_group()
@@ -200,7 +208,10 @@ mod tests {
 
         backend.stop().await.expect("Unable to stop");
 
-        backend.start_with_namespace(Some("group_name_persistence".to_string())).await.expect("Unable to restart");
+        backend
+            .start_with_namespace(Some("group_name_persistence".to_string()))
+            .await
+            .expect("Unable to restart");
         let loaded_group = backend.get_group(&group.id()).await.expect(GROUP_NOT_FOUND);
 
         let name = loaded_group
@@ -222,7 +233,10 @@ mod tests {
             .expect("Failed to create base directory");
 
         let mut backend = Backend::new(path.as_ref()).expect("Unable to create Backend");
-        backend.start_with_namespace(Some("repo_persistence".to_string())).await.expect("Unable to start backend");
+        backend
+            .start_with_namespace(Some("repo_persistence".to_string()))
+            .await
+            .expect("Unable to start backend");
 
         let mut group = backend
             .create_group()
@@ -235,10 +249,11 @@ mod tests {
         backend.stop().await.expect("Unable to stop backend");
 
         // Restart backend and verify group and repo persistence
-        backend.start_with_namespace(Some("repo_persistence".to_string())).await.expect("Unable to restart backend");
-        println!(
-            "Backend restarted, attempting to load group with ID: {group_id:?}"
-        );
+        backend
+            .start_with_namespace(Some("repo_persistence".to_string()))
+            .await
+            .expect("Unable to restart backend");
+        println!("Backend restarted, attempting to load group with ID: {group_id:?}");
 
         let mut reload_group = backend.get_group(&group_id).await.expect(GROUP_NOT_FOUND);
         let loaded_group_id = reload_group.id();
@@ -248,10 +263,11 @@ mod tests {
         backend.stop().await.expect("Unable to stop backend");
 
         // Restart backend and verify group and repo persistence
-        backend.start_with_namespace(Some("repo_persistence".to_string())).await.expect("Unable to restart backend");
-        println!(
-            "Backend restarted, attempting to load group with ID: {loaded_group_id:?}"
-        );
+        backend
+            .start_with_namespace(Some("repo_persistence".to_string()))
+            .await
+            .expect("Unable to restart backend");
+        println!("Backend restarted, attempting to load group with ID: {loaded_group_id:?}");
 
         let mut loaded_group = backend
             .get_group(&loaded_group_id)
@@ -424,7 +440,8 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn upload_blob_and_verify_protected_store() -> Result<()> {
-        let (backend, tmpdir) = setup_test_backend("upload_blob_and_verify_protected_store").await?;
+        let (backend, tmpdir) =
+            setup_test_backend("upload_blob_and_verify_protected_store").await?;
         let path = tmpdir.to_path_buf();
 
         // Create a group
@@ -583,7 +600,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_join() {
-        let (backend, _tmpdir) = setup_test_backend("test_join").await.expect("Unable to setup backend");
+        let (backend, _tmpdir) = setup_test_backend("test_join")
+            .await
+            .expect("Unable to setup backend");
         let group = backend
             .create_group()
             .await
@@ -646,7 +665,6 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn download_hash_from_peers_test() -> Result<()> {
-
         let base_dir = TmpDir::new("test_dweb_backend_download_hash")
             .await
             .unwrap();
@@ -882,7 +900,8 @@ mod tests {
     #[serial]
     async fn test_create_collection_and_upload_file_via_backend() -> Result<()> {
         // Setup temporary directory for backend and veilid blobs
-        let (backend, tmpdir) = setup_test_backend("test_create_collection_and_upload_file_via_backend").await?;
+        let (backend, tmpdir) =
+            setup_test_backend("test_create_collection_and_upload_file_via_backend").await?;
         let path = tmpdir.to_path_buf();
 
         // Step 1: Create a group via backend
@@ -956,7 +975,8 @@ mod tests {
     #[serial]
     async fn test_delete_file_from_collection_via_backend() -> Result<()> {
         // Setup temporary directory for backend and veilid blobs
-        let (backend, tmpdir) = setup_test_backend("test_delete_file_from_collection_via_backend").await?;
+        let (backend, tmpdir) =
+            setup_test_backend("test_delete_file_from_collection_via_backend").await?;
         let path = tmpdir.to_path_buf();
 
         // Step 1: Create a group via backend
@@ -1208,12 +1228,9 @@ mod tests {
         let path = tmpdir.to_path_buf();
 
         println!("Initializing client Veilid instance...");
-        let (veilid2, _) = init_veilid(
-            &path.join("client"),
-            "save-dweb-backup-client".to_string(),
-        )
-        .await
-        .map_err(|e| anyhow!("Failed to init client Veilid: {e}"))?;
+        let (veilid2, _) = init_veilid(&path.join("client"), "save-dweb-backup-client".to_string())
+            .await
+            .map_err(|e| anyhow!("Failed to init client Veilid: {e}"))?;
 
         println!("Backend already started via setup_test_backend");
 
@@ -1235,21 +1252,27 @@ mod tests {
         println!("RPC service URL: {url}");
 
         // Wait longer for DHT propagation between two separate Veilid instances
-        println!("Waiting 10 seconds for DHT propagation...");
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        // Veilid 0.5.3 requires complete bootstrap before PublicInternet Ready
+        println!("Waiting 20 seconds for DHT propagation...");
+        tokio::time::sleep(Duration::from_secs(20)).await;
 
         println!("Creating RPC client...");
-        let client = RpcClient::from_veilid(veilid2.clone(), &url).await
+        let client = RpcClient::from_veilid(veilid2.clone(), &url)
+            .await
             .map_err(|e| anyhow!("Failed to create RPC client: {e}"))?;
 
         println!("Getting name from RPC service...");
-        let name = client.get_name().await
+        let name = client
+            .get_name()
+            .await
             .map_err(|e| anyhow!("Failed to get name: {e}"))?;
 
         assert_eq!(name, "Example", "Unable to get name");
 
         println!("Listing groups...");
-        let list = client.list_groups().await
+        let list = client
+            .list_groups()
+            .await
             .map_err(|e| anyhow!("Failed to list groups: {e}"))?;
 
         assert_eq!(list.group_ids.len(), 0, "No groups on init");
@@ -1271,9 +1294,7 @@ mod tests {
         // When Device B joins a group created by Device A, it should automatically
         // create its own repo so it can upload files.
 
-        let base_dir = TmpDir::new("test_auto_create_repo_on_join")
-            .await
-            .unwrap();
+        let base_dir = TmpDir::new("test_auto_create_repo_on_join").await.unwrap();
 
         let base_dir_path = base_dir.to_path_buf();
 

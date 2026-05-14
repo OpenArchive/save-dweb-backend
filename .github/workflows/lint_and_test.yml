@@ -12,12 +12,15 @@ jobs:
         uses: hecrj/setup-rust-action@v2
         with:
           rust-version: stable
-      
+
       - name: Check out the code
         uses: actions/checkout@v4
 
-      - name: Install Clippy
-        run: rustup component add clippy
+      - name: Install Rust components
+        run: rustup component add rustfmt clippy
+
+      - name: Check formatting
+        run: cargo fmt --check
 
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
