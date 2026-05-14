@@ -26,6 +26,10 @@ pub mod test_helpers {
     /// Creates a unique TmpDir and initializes Veilid with a unique namespace
     /// to avoid "Already initialized" errors between test runs.
     pub async fn setup_test_backend(test_name: &str) -> Result<(Backend, TmpDir)> {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .try_init();
+
         let path = TmpDir::new(test_name)
             .await
             .map_err(|e| anyhow!("Failed to create temp directory: {e}"))?;
