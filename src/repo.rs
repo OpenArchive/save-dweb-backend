@@ -423,7 +423,7 @@ impl Repo {
         let mut buffer = Vec::with_capacity(4 + 1 + nonce.bytes().len() + encrypted_chunk.len());
         buffer.extend_from_slice(MAGIC);
         buffer.push(VERSION);
-        buffer.extend_from_slice(nonce.bytes());
+        buffer.extend_from_slice(&nonce.bytes());
         buffer.extend_from_slice(&encrypted_chunk);
 
         Ok(buffer)
