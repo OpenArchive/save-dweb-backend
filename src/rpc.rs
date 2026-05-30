@@ -155,38 +155,7 @@ impl RpcClient {
         payload.extend_from_slice(&message);
 
         let response = self.routing_context.app_call(target, payload).await?;
-
-        if response.is_empty() {
-            return Err(anyhow!("Empty response received from RPC call"));
-        }
-
-        let response_message_type = response[0];
-        let payload = &response[1..];
-
-        if response_message_type == MESSAGE_TYPE_ERROR {
-            let rpc_response: RpcResponse<()> = serde_cbor::from_slice(payload)?;
-            if let Some(err) = rpc_response.error {
-                return Err(anyhow!("RPC Error: {err}"));
-            } else {
-                return Err(anyhow!("Unknown error format in RPC response"));
-            }
-        }
-
-        if response_message_type != message_type {
-            return Err(anyhow!(
-                "Unexpected message type in response. Expected: {message_type}, Got: {response_message_type}"
-            ));
-        }
-
-        let rpc_response: RpcResponse<R> = serde_cbor::from_slice(payload)?;
-
-        if let Some(data) = rpc_response.success {
-            return Ok(data);
-        }
-
-        Err(anyhow!(
-            "RPC Response is missing both success and error fields"
-        ))
+        decode_rpc_response(&response, message_type)
     }
 
     pub async fn get_name(&self) -> Result<String> {
@@ -367,7 +336,7 @@ impl RpcService {
     /// Rebuild our private route after veilid reports it dead. Update the local
     /// route_id first so incoming calls are immediately accepted, then publish
     /// the new blob to DHT so clients discover it on their next fetch.
-    async fn rebuild_route(&self) -> Result<()> {
+    pub(crate) async fn rebuild_route(&self) -> Result<()> {
         let veilid = self
             .backend
             .get_veilid_api()
@@ -517,14 +486,12 @@ impl RpcService {
         message_type: u8,
         response: &RpcResponse<T>,
     ) -> Result<()> {
-        let mut response_buf = vec![message_type];
-        let payload = serde_cbor::to_vec(response)?;
+        let response_buf = encode_rpc_response(message_type, response)?;
+        let payload_len = response_buf.len().saturating_sub(1);
         info!(
             "Sending RPC response: type={}, payload_len={}",
-            message_type,
-            payload.len()
+            message_type, payload_len
         );
-        response_buf.extend_from_slice(&payload);
 
         self.backend
             .get_veilid_api()
@@ -583,7 +550,10 @@ impl RpcService {
         match backend.list_groups().await {
             Ok(groups) => RpcResponse {
                 success: Some(ListGroupsResponse {
-                    group_ids: groups.iter().map(|g| g.id().to_string()).collect(),
+                    group_ids: groups
+                        .iter()
+                        .map(|group| group_id_to_rpc_string(&group.id()))
+                        .collect(),
                 }),
                 error: None,
             },
@@ -603,33 +573,15 @@ impl RpcService {
 
         let backend = self.backend.clone();
 
-        let group_bytes = match URL_SAFE_NO_PAD.decode(&group_id) {
-            Ok(bytes) => bytes,
+        let group_key = match parse_remove_group_id(&group_id) {
+            Ok(group_key) => group_key,
             Err(err) => {
                 return RpcResponse {
                     success: None,
-                    error: Some(format!("Failed to decode group ID: {err}")),
+                    error: Some(err.to_string()),
                 };
             }
         };
-
-        let group_bytes: [u8; 32] = match group_bytes.try_into() {
-            Ok(bytes) => bytes,
-            Err(v) => {
-                return RpcResponse {
-                    success: None,
-                    error: Some(format!("Expected 32 bytes, got {}", v.len())),
-                };
-            }
-        };
-
-        let group_key = RecordKey::new(
-            CRYPTO_KIND_VLD0,
-            veilid_core::BareRecordKey::new(
-                veilid_core::BareOpaqueRecordKey::from(&group_bytes[..]),
-                None,
-            ),
-        );
 
         match backend.close_group(group_key).await {
             Ok(_) => RpcResponse {
@@ -704,6 +656,81 @@ async fn download(group: &Group, hash: &Hash) -> Result<()> {
     group.download_hash_from_peers(hash).await
 }
 
+fn encode_rpc_response<T: Serialize>(
+    message_type: u8,
+    response: &RpcResponse<T>,
+) -> Result<Vec<u8>> {
+    let mut response_buf = vec![message_type];
+    let payload = serde_cbor::to_vec(response)?;
+    response_buf.extend_from_slice(&payload);
+    Ok(response_buf)
+}
+
+fn decode_rpc_response<R: for<'de> Deserialize<'de>>(
+    response: &[u8],
+    expected_message_type: u8,
+) -> Result<R> {
+    if response.is_empty() {
+        return Err(anyhow!("Empty response received from RPC call"));
+    }
+
+    let response_message_type = response[0];
+    let payload = &response[1..];
+
+    if response_message_type == MESSAGE_TYPE_ERROR {
+        let rpc_response: RpcResponse<()> = serde_cbor::from_slice(payload)?;
+        if let Some(err) = rpc_response.error {
+            return Err(anyhow!("RPC Error: {err}"));
+        } else {
+            return Err(anyhow!("Unknown error format in RPC response"));
+        }
+    }
+
+    if response_message_type != expected_message_type {
+        return Err(anyhow!(
+            "Unexpected message type in response. Expected: {expected_message_type}, Got: {response_message_type}"
+        ));
+    }
+
+    let rpc_response: RpcResponse<R> = serde_cbor::from_slice(payload)?;
+
+    if let Some(data) = rpc_response.success {
+        return Ok(data);
+    }
+
+    Err(anyhow!(
+        "RPC Response is missing both success and error fields"
+    ))
+}
+
+fn parse_remove_group_id(group_id: &str) -> Result<RecordKey> {
+    match URL_SAFE_NO_PAD.decode(group_id) {
+        Ok(group_bytes) => {
+            let len = group_bytes.len();
+            let group_bytes: [u8; 32] = group_bytes
+                .try_into()
+                .map_err(|_| anyhow!("Expected 32 bytes, got {len}"))?;
+
+            Ok(RecordKey::new(
+                CRYPTO_KIND_VLD0,
+                veilid_core::BareRecordKey::new(
+                    veilid_core::BareOpaqueRecordKey::from(&group_bytes[..]),
+                    None,
+                ),
+            ))
+        }
+        Err(decode_err) => RecordKey::try_from(group_id).map_err(|parse_err| {
+            anyhow!(
+                "Failed to decode group ID: {decode_err}; failed to parse record key: {parse_err}"
+            )
+        }),
+    }
+}
+
+fn group_id_to_rpc_string(group_id: &RecordKey) -> String {
+    URL_SAFE_NO_PAD.encode(group_id.opaque().ref_value().bytes())
+}
+
 impl DHTEntity for RpcServiceDescriptor {
     async fn set_name(&self, name: &str) -> Result<()> {
         let routing_context = self.get_routing_context();
@@ -737,5 +764,157 @@ impl DHTEntity for RpcServiceDescriptor {
 
     fn get_veilid_api(&self) -> VeilidAPI {
         self.veilid.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::test_helpers::setup_test_backend;
+    use serial_test::serial;
+
+    fn err_string<T>(result: Result<T>) -> String {
+        match result {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[test]
+    fn rpc_join_response_wire_roundtrip_decodes_success() {
+        let response = RpcResponse {
+            success: Some(JoinGroupResponse {
+                status_message: "joined".to_string(),
+            }),
+            error: None,
+        };
+        let wire = encode_rpc_response(MESSAGE_TYPE_JOIN_GROUP, &response)
+            .expect("response should encode");
+
+        let decoded: JoinGroupResponse =
+            decode_rpc_response(&wire, MESSAGE_TYPE_JOIN_GROUP).expect("response should decode");
+
+        assert_eq!(decoded.status_message, "joined");
+    }
+
+    #[test]
+    fn rpc_remove_response_wire_roundtrip_decodes_success() {
+        let response = RpcResponse {
+            success: Some(RemoveGroupResponse {
+                status_message: "removed".to_string(),
+            }),
+            error: None,
+        };
+        let wire = encode_rpc_response(MESSAGE_TYPE_REMOVE_GROUP, &response)
+            .expect("response should encode");
+
+        let decoded: RemoveGroupResponse =
+            decode_rpc_response(&wire, MESSAGE_TYPE_REMOVE_GROUP).expect("response should decode");
+
+        assert_eq!(decoded.status_message, "removed");
+    }
+
+    #[test]
+    fn rpc_response_wire_roundtrip_surfaces_error() {
+        let response: RpcResponse<()> = RpcResponse {
+            success: None,
+            error: Some("boom".to_string()),
+        };
+        let wire = encode_rpc_response(MESSAGE_TYPE_ERROR, &response).expect("error should encode");
+
+        let message = err_string(decode_rpc_response::<JoinGroupResponse>(
+            &wire,
+            MESSAGE_TYPE_JOIN_GROUP,
+        ));
+
+        assert!(message.contains("RPC Error: boom"));
+    }
+
+    #[test]
+    fn rpc_response_decode_rejects_unexpected_message_type() {
+        let response = RpcResponse {
+            success: Some(JoinGroupResponse {
+                status_message: "joined".to_string(),
+            }),
+            error: None,
+        };
+        let wire = encode_rpc_response(MESSAGE_TYPE_JOIN_GROUP, &response)
+            .expect("response should encode");
+
+        let message = err_string(decode_rpc_response::<RemoveGroupResponse>(
+            &wire,
+            MESSAGE_TYPE_REMOVE_GROUP,
+        ));
+
+        assert!(message.contains("Unexpected message type"));
+    }
+
+    #[test]
+    fn parse_remove_group_id_rejects_malformed_base64() {
+        let err = parse_remove_group_id("not base64!").expect_err("invalid base64 should fail");
+        assert!(err.to_string().contains("Failed to decode group ID"));
+    }
+
+    #[test]
+    fn parse_remove_group_id_rejects_short_id() {
+        let short = URL_SAFE_NO_PAD.encode([1u8; 4]);
+        let err = parse_remove_group_id(&short).expect_err("short ID should fail");
+        assert!(err.to_string().contains("Expected 32 bytes"));
+    }
+
+    #[test]
+    fn parse_remove_group_id_accepts_32_byte_id() {
+        let encoded = URL_SAFE_NO_PAD.encode([4u8; 32]);
+        let key = parse_remove_group_id(&encoded).expect("32-byte ID should parse");
+
+        assert_eq!(key.opaque().ref_value().bytes().as_ref(), &[4u8; 32]);
+    }
+
+    #[test]
+    fn listed_group_id_roundtrips_through_remove_parser() {
+        let key = RecordKey::new(
+            CRYPTO_KIND_VLD0,
+            veilid_core::BareRecordKey::new(
+                veilid_core::BareOpaqueRecordKey::from(&[5u8; 32][..]),
+                None,
+            ),
+        );
+
+        let listed = group_id_to_rpc_string(&key);
+        let parsed = parse_remove_group_id(&listed).expect("listed ID should parse");
+
+        assert_eq!(parsed, key);
+    }
+
+    #[test]
+    fn parse_remove_group_id_accepts_record_key_display_for_compatibility() {
+        let key = RecordKey::new(
+            CRYPTO_KIND_VLD0,
+            veilid_core::BareRecordKey::new(
+                veilid_core::BareOpaqueRecordKey::from(&[6u8; 32][..]),
+                None,
+            ),
+        );
+
+        let parsed = parse_remove_group_id(&key.to_string()).expect("record key should parse");
+
+        assert_eq!(parsed, key);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn rpc_route_rebuild_updates_published_route_blob() -> Result<()> {
+        let (backend, _tmpdir) =
+            setup_test_backend("rpc_route_rebuild_updates_published_route_blob").await?;
+        let rpc = RpcService::from_backend(&backend).await?;
+        let before = rpc.descriptor.get_route_id_blob().await?;
+
+        rpc.rebuild_route().await?;
+
+        let after = rpc.descriptor.get_route_id_blob().await?;
+        assert_ne!(before, after);
+
+        backend.stop().await?;
+        Ok(())
     }
 }

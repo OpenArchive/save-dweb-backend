@@ -3,6 +3,7 @@ use crate::repo::Repo;
 use crate::{common::DHTEntity, repo};
 use anyhow::{anyhow, Error, Result};
 use bytes::Bytes;
+use futures_util::future::join_all;
 use hex::ToHex;
 use iroh::net::key::SecretKey as IrohSecretKey;
 use iroh_blobs::Hash;
@@ -32,6 +33,85 @@ pub const URL_DHT_KEY: &str = "dht";
 pub const URL_ENCRYPTION_KEY: &str = "enc";
 pub const URL_PUBLIC_KEY: &str = "pk";
 pub const URL_SECRET_KEY: &str = "sk";
+pub const MAX_GROUP_REPOS: u32 = 64;
+
+#[derive(Debug, PartialEq, Eq)]
+enum RepoAdvertisementSlot {
+    AlreadyPresent(u32),
+    Open(u32),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RepoAdvertisementVerification {
+    Verified,
+    Missing,
+    Collision,
+}
+
+fn choose_repo_advertisement_slot<'a, I>(slots: I, repo_key: &[u8]) -> Result<RepoAdvertisementSlot>
+where
+    I: IntoIterator<Item = (u32, Option<&'a [u8]>)>,
+{
+    let mut first_open = None;
+
+    for (subkey, value) in slots {
+        if !(1..=MAX_GROUP_REPOS).contains(&subkey) {
+            continue;
+        }
+
+        match value {
+            Some(existing) if existing == repo_key => {
+                return Ok(RepoAdvertisementSlot::AlreadyPresent(subkey));
+            }
+            Some(_) => {}
+            None if first_open.is_none() => first_open = Some(subkey),
+            None => {}
+        }
+    }
+
+    first_open
+        .map(RepoAdvertisementSlot::Open)
+        .ok_or_else(|| anyhow!("No free repo advertisement slots in group DHT record"))
+}
+
+fn verify_repo_advertisement(
+    stored_value: Option<&[u8]>,
+    repo_key: &[u8],
+) -> RepoAdvertisementVerification {
+    match stored_value {
+        Some(value) if value == repo_key => RepoAdvertisementVerification::Verified,
+        Some(_) => RepoAdvertisementVerification::Collision,
+        None => RepoAdvertisementVerification::Missing,
+    }
+}
+
+fn repo_watch_subkey_bounds() -> (u32, u32) {
+    (1, MAX_GROUP_REPOS)
+}
+
+fn repo_record_key_from_dht_bytes(data: &[u8]) -> Result<RecordKey> {
+    if data.len() == 32 {
+        // Legacy (pre-Veilid-0.5.1): raw 32-byte opaque key from old advertise_own_repo.
+        // Supports mixed groups where some peers have not yet upgraded.
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(data);
+        return Ok(RecordKey::new(
+            CRYPTO_KIND_VLD0,
+            veilid_core::BareRecordKey::new(veilid_core::BareOpaqueRecordKey::from(&arr[..]), None),
+        ));
+    }
+
+    if let Ok(s) = String::from_utf8(data.to_vec()) {
+        let bare_key = veilid_core::BareRecordKey::try_decode(&s)
+            .map_err(|e| anyhow!("Failed to decode repo record key: {e}"))?;
+        return Ok(RecordKey::new(CRYPTO_KIND_VLD0, bare_key));
+    }
+
+    Err(anyhow!(
+        "Repo key on DHT is neither legacy 32-byte nor valid UTF-8 encoded key (len={})",
+        data.len()
+    ))
+}
 
 #[derive(Clone)]
 pub struct Group {
@@ -296,35 +376,59 @@ impl Group {
         Ok(url.to_string())
     }
 
-    async fn dht_repo_count(&self) -> Result<usize> {
-        let dht_record = &self.dht_record;
-        let range = ValueSubkeyRangeSet::full();
+    async fn load_repo_advertisement_slots(
+        &self,
+        include_open_slot: bool,
+    ) -> Result<Vec<(u32, Option<Vec<u8>>)>> {
+        let range = ValueSubkeyRangeSet::single_range(1, MAX_GROUP_REPOS);
         let scope = DHTReportScope::UpdateGet;
-
-        let record_key = dht_record.key().clone();
-
         let report = self
             .routing_context
-            .inspect_dht_record(record_key.clone(), Some(range), scope)
+            .inspect_dht_record(self.dht_record.key().clone(), Some(range), scope)
             .await?;
 
-        let size = report.network_seqs().len();
+        let mut subkeys_to_read = Vec::new();
+        let mut first_open_slot = None;
+        for ((subkey, local_seq), network_seq) in report
+            .subkeys()
+            .iter()
+            .zip(report.local_seqs())
+            .zip(report.network_seqs())
+        {
+            if !(1..=MAX_GROUP_REPOS).contains(&subkey) {
+                continue;
+            }
 
-        let mut count = 0;
-
-        while count + 1 < size {
-            let value = self
-                .routing_context
-                .get_dht_value(record_key.clone(), (count + 1).try_into()?, true)
-                .await?;
-            if value.is_some() {
-                count += 1;
-            } else {
-                return Ok(count);
+            if local_seq.is_some() || network_seq.is_some() {
+                subkeys_to_read.push(subkey);
+            } else if include_open_slot && first_open_slot.is_none() {
+                first_open_slot = Some(subkey);
             }
         }
 
-        Ok(count)
+        let record_key = self.dht_record.key().clone();
+        let reads = subkeys_to_read.into_iter().map(|subkey| {
+            let routing_context = self.routing_context.clone();
+            let record_key = record_key.clone();
+            async move {
+                let value = routing_context
+                    .get_dht_value(record_key, subkey, true)
+                    .await?
+                    .map(|value| value.data().to_vec());
+                Ok::<_, anyhow::Error>((subkey, value))
+            }
+        });
+
+        let mut slots = Vec::with_capacity(MAX_GROUP_REPOS as usize);
+        for result in join_all(reads).await {
+            slots.push(result?);
+        }
+        if let Some(subkey) = first_open_slot {
+            slots.push((subkey, None));
+        }
+        slots.sort_by_key(|(subkey, _)| *subkey);
+
+        Ok(slots)
     }
 
     pub async fn advertise_own_repo(&self) -> Result<()> {
@@ -337,30 +441,89 @@ impl Group {
         // joining devices can decrypt the repo's DHT values.
         let repo_key = repo.id().ref_value().encode().into_bytes();
 
-        let count = self.dht_repo_count().await? + 1;
+        for _attempt in 0..MAX_GROUP_REPOS {
+            let slots = self.load_repo_advertisement_slots(true).await?;
+            let decision = choose_repo_advertisement_slot(
+                slots
+                    .iter()
+                    .map(|(subkey, value)| (*subkey, value.as_deref())),
+                &repo_key,
+            )?;
 
-        info!(
-            "Advertising own repo {} to group {} at subkey {}",
-            hex::encode(repo.id().opaque().ref_value()),
-            hex::encode(self.id().opaque().ref_value()),
-            count
-        );
+            let subkey = match decision {
+                RepoAdvertisementSlot::AlreadyPresent(subkey) => {
+                    info!(
+                        "Own repo {} already advertised in group {} at subkey {}",
+                        hex::encode(repo.id().opaque().ref_value()),
+                        hex::encode(self.id().opaque().ref_value()),
+                        subkey
+                    );
+                    return Ok(());
+                }
+                RepoAdvertisementSlot::Open(subkey) => subkey,
+            };
 
-        self.routing_context
-            .set_dht_value(
-                self.dht_record.key().clone(),
-                count.try_into()?,
-                repo_key,
-                Some(SetDHTValueOptions::default()),
-            )
-            .await?;
+            info!(
+                "Advertising own repo {} to group {} at subkey {}",
+                hex::encode(repo.id().opaque().ref_value()),
+                hex::encode(self.id().opaque().ref_value()),
+                subkey
+            );
 
-        info!(
-            "Successfully advertised own repo {} to group",
-            hex::encode(repo.id().opaque().ref_value())
-        );
+            if let Some(conflict) = self
+                .routing_context
+                .set_dht_value(
+                    self.dht_record.key().clone(),
+                    subkey,
+                    repo_key.clone(),
+                    Some(SetDHTValueOptions::default()),
+                )
+                .await?
+            {
+                if conflict.data() != repo_key.as_slice() {
+                    warn!(
+                        "Repo advertisement slot {} collided while setting; retrying",
+                        subkey
+                    );
+                    continue;
+                }
+            }
 
-        Ok(())
+            let stored_value = self
+                .routing_context
+                .get_dht_value(self.dht_record.key().clone(), subkey, true)
+                .await?;
+
+            match verify_repo_advertisement(
+                stored_value.as_ref().map(|value| value.data()),
+                &repo_key,
+            ) {
+                RepoAdvertisementVerification::Verified => {
+                    info!(
+                        "Successfully advertised own repo {} to group at subkey {}",
+                        hex::encode(repo.id().opaque().ref_value()),
+                        subkey
+                    );
+                    return Ok(());
+                }
+                RepoAdvertisementVerification::Missing => {
+                    warn!(
+                        "Repo advertisement slot {} was still empty; retrying",
+                        subkey
+                    );
+                }
+                RepoAdvertisementVerification::Collision => {
+                    warn!(
+                        "Repo advertisement slot {} was claimed by another repo; retrying",
+                        subkey
+                    );
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "Unable to advertise own repo without a repo-slot collision after {MAX_GROUP_REPOS} attempts"
+        ))
     }
 
     pub async fn load_repo_from_network(
@@ -426,36 +589,8 @@ impl Group {
         Ok(repo)
     }
 
-    async fn load_repo_from_dht(&mut self, subkey: u32) -> Result<RecordKey> {
-        let repo_id_raw = self
-            .routing_context
-            .get_dht_value(self.dht_record.key().clone(), subkey, true)
-            .await?
-            .ok_or_else(|| anyhow!("Unable to load repo ID from DHT"))?;
-
-        let data = repo_id_raw.data();
-        let repo_id = if data.len() == 32 {
-            // Legacy (pre-Veilid-0.5.1): raw 32-byte opaque key from old advertise_own_repo.
-            // Supports mixed groups where some peers have not yet upgraded.
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(data);
-            RecordKey::new(
-                CRYPTO_KIND_VLD0,
-                veilid_core::BareRecordKey::new(
-                    veilid_core::BareOpaqueRecordKey::from(&arr[..]),
-                    None,
-                ),
-            )
-        } else if let Ok(s) = String::from_utf8(data.to_vec()) {
-            let bare_key = veilid_core::BareRecordKey::try_decode(&s)
-                .map_err(|e| anyhow!("Failed to decode repo record key: {e}"))?;
-            RecordKey::new(CRYPTO_KIND_VLD0, bare_key)
-        } else {
-            return Err(anyhow!(
-                "Repo key on DHT is neither legacy 32-byte nor valid UTF-8 encoded key (len={})",
-                data.len()
-            ));
-        };
+    async fn load_repo_from_dht_value(&mut self, data: &[u8]) -> Result<RecordKey> {
+        let repo_id = repo_record_key_from_dht_bytes(data)?;
 
         let cache_key = Self::repo_cache_key(&repo_id);
         if self.repos.lock().await.contains_key(&cache_key) {
@@ -467,15 +602,15 @@ impl Group {
     }
 
     pub async fn load_repos_from_dht(&mut self) -> Result<()> {
-        let count = self.dht_repo_count().await?;
+        for (subkey, value) in self.load_repo_advertisement_slots(false).await? {
+            let Some(repo_id_raw) = value else {
+                continue;
+            };
 
-        let mut i = 1;
-        while i <= count {
-            info!("Loading from DHT {i}");
-            if let Err(e) = self.load_repo_from_dht(i.try_into()?).await {
-                warn!("Warning: Failed to load repo {i} from DHT: {e:?}");
+            match self.load_repo_from_dht_value(&repo_id_raw).await {
+                Ok(_) => info!("Loaded repo from DHT subkey {subkey}"),
+                Err(e) => warn!("Warning: Failed to load repo {subkey} from DHT: {e:?}"),
             }
-            i += 1;
         }
 
         Ok(())
@@ -636,17 +771,8 @@ impl Group {
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
-        let repo_count = self.dht_repo_count().await?;
-        let range = if repo_count > 0 {
-            ValueSubkeyRangeSet::single_range(0, repo_count as u32 - 1)
-        } else {
-            ValueSubkeyRangeSet::full()
-        };
-
-        let expiration_duration = 600_000_000;
-        let expiration =
-            SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros() as u64 + expiration_duration;
-        let count = 0;
+        let (start, end) = repo_watch_subkey_bounds();
+        let range = ValueSubkeyRangeSet::single_range(start, end);
 
         // Clone necessary data for the async block
         let routing_context = self.routing_context.clone();
@@ -710,5 +836,114 @@ impl DHTEntity for Group {
 
     fn get_secret_key(&self) -> Option<SecretKey> {
         self.owner_secret()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encoded_record_key(byte: u8) -> String {
+        let bytes = [byte; 32];
+        RecordKey::new(
+            CRYPTO_KIND_VLD0,
+            veilid_core::BareRecordKey::new(
+                veilid_core::BareOpaqueRecordKey::from(&bytes[..]),
+                None,
+            ),
+        )
+        .ref_value()
+        .encode()
+    }
+
+    #[test]
+    fn repo_advertisement_slot_reuses_existing_slot_for_same_repo() {
+        let repo_key = b"repo-a";
+        let decision =
+            choose_repo_advertisement_slot([(1, Some(repo_key.as_slice())), (2, None)], repo_key)
+                .expect("slot should resolve");
+
+        assert_eq!(decision, RepoAdvertisementSlot::AlreadyPresent(1));
+    }
+
+    #[test]
+    fn repo_advertisement_slot_finds_existing_repo_after_hole() {
+        let repo_key = b"repo-a";
+        let other_repo = b"repo-b";
+        let decision = choose_repo_advertisement_slot(
+            [
+                (1, Some(other_repo.as_slice())),
+                (2, None),
+                (3, Some(repo_key.as_slice())),
+            ],
+            repo_key,
+        )
+        .expect("slot should resolve");
+
+        assert_eq!(decision, RepoAdvertisementSlot::AlreadyPresent(3));
+    }
+
+    #[test]
+    fn concurrent_repo_slot_collision_retries_next_open_slot() {
+        let repo_key = b"repo-a";
+        let other_repo = b"repo-b";
+        let first = choose_repo_advertisement_slot(
+            [(1, None), (2, None), (3, Some(other_repo.as_slice()))],
+            repo_key,
+        )
+        .expect("first open slot should resolve");
+        assert_eq!(first, RepoAdvertisementSlot::Open(1));
+
+        let verification =
+            verify_repo_advertisement(Some(other_repo.as_slice()), repo_key.as_slice());
+        assert_eq!(verification, RepoAdvertisementVerification::Collision);
+
+        let retry = choose_repo_advertisement_slot(
+            [
+                (1, Some(other_repo.as_slice())),
+                (2, None),
+                (3, Some(other_repo.as_slice())),
+            ],
+            repo_key,
+        )
+        .expect("retry slot should resolve");
+        assert_eq!(retry, RepoAdvertisementSlot::Open(2));
+    }
+
+    #[test]
+    fn repo_slot_verification_detects_missing_value() {
+        assert_eq!(
+            verify_repo_advertisement(None, b"repo-a"),
+            RepoAdvertisementVerification::Missing
+        );
+    }
+
+    #[test]
+    fn repo_watch_changes_scans_all_repo_slots_without_group_name_slot() {
+        assert_eq!(repo_watch_subkey_bounds(), (1, MAX_GROUP_REPOS));
+    }
+
+    #[test]
+    fn repo_record_key_from_dht_bytes_accepts_encoded_record_key() {
+        let encoded = encoded_record_key(8);
+        let decoded = repo_record_key_from_dht_bytes(encoded.as_bytes())
+            .expect("encoded record key should parse");
+
+        assert_eq!(decoded.ref_value().encode(), encoded);
+    }
+
+    #[test]
+    fn repo_record_key_from_dht_bytes_accepts_legacy_opaque_key() {
+        let legacy = [9u8; 32];
+        let decoded = repo_record_key_from_dht_bytes(&legacy).expect("legacy key should parse");
+
+        assert_eq!(decoded.opaque().ref_value().bytes().as_ref(), &legacy);
+    }
+
+    #[test]
+    fn repo_record_key_from_dht_bytes_rejects_corrupted_value() {
+        let err = repo_record_key_from_dht_bytes(&[0xff, 0xfe, 0xfd])
+            .expect_err("invalid dht value should fail");
+        assert!(err.to_string().contains("valid UTF-8"));
     }
 }

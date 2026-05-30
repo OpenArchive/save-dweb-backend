@@ -16,6 +16,28 @@ use veilid_core::{
 
 use crate::constants::ROUTE_ID_DHT_KEY;
 
+pub(crate) const AEAD_NONCE_LEN: usize = 24;
+
+pub(crate) fn split_aead_payload(data: &[u8]) -> Result<([u8; AEAD_NONCE_LEN], &[u8])> {
+    if data.len() < AEAD_NONCE_LEN {
+        return Err(anyhow!(
+            "Encrypted payload too short: expected at least {AEAD_NONCE_LEN} bytes for nonce, got {}",
+            data.len()
+        ));
+    }
+
+    let (nonce_bytes, encrypted_data) = data.split_at(AEAD_NONCE_LEN);
+    if encrypted_data.is_empty() {
+        return Err(anyhow!("Encrypted payload has no ciphertext"));
+    }
+
+    let nonce = nonce_bytes
+        .try_into()
+        .map_err(|_| anyhow!("Failed to convert nonce slice to array"))?;
+
+    Ok((nonce, encrypted_data))
+}
+
 #[cfg(test)]
 pub mod test_helpers {
     use super::*;
@@ -229,11 +251,8 @@ pub trait DHTEntity {
             .get(CRYPTO_KIND_VLD0)
             .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
 
-        let nonce: [u8; 24] = data[..24]
-            .try_into()
-            .map_err(|_| anyhow!("Failed to convert nonce slice to array"))?;
+        let (nonce, encrypted_data) = split_aead_payload(data)?;
         let nonce = Nonce::new(&nonce);
-        let encrypted_data = &data[24..];
         crypto_system
             .decrypt_aead(
                 encrypted_data,
@@ -353,5 +372,34 @@ pub trait DHTEntity {
 
     async fn leave(&self) -> Result<()> {
         unimplemented!("WIP")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_aead_payload_rejects_short_ciphertext() {
+        let err = split_aead_payload(b"short").expect_err("short payload should fail");
+        assert!(err.to_string().contains("too short"));
+    }
+
+    #[test]
+    fn split_aead_payload_rejects_missing_ciphertext() {
+        let payload = [0u8; AEAD_NONCE_LEN];
+        let err = split_aead_payload(&payload).expect_err("nonce-only payload should fail");
+        assert!(err.to_string().contains("no ciphertext"));
+    }
+
+    #[test]
+    fn split_aead_payload_returns_nonce_and_ciphertext() {
+        let mut payload = vec![7u8; AEAD_NONCE_LEN];
+        payload.extend_from_slice(b"ciphertext");
+
+        let (nonce, ciphertext) = split_aead_payload(&payload).expect("payload should split");
+
+        assert_eq!(nonce, [7u8; AEAD_NONCE_LEN]);
+        assert_eq!(ciphertext, b"ciphertext");
     }
 }
