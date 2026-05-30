@@ -229,6 +229,13 @@ pub trait DHTEntity {
             .get(CRYPTO_KIND_VLD0)
             .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
 
+        // The first 24 bytes are the nonce; a shorter value can't carry one.
+        if data.len() < 24 {
+            return Err(anyhow!(
+                "Ciphertext too short: expected at least 24 bytes for nonce, got {}",
+                data.len()
+            ));
+        }
         let nonce: [u8; 24] = data[..24]
             .try_into()
             .map_err(|_| anyhow!("Failed to convert nonce slice to array"))?;
