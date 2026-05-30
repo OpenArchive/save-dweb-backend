@@ -257,7 +257,7 @@ impl Group {
             self.download_hash_from_peers(hash).await?
         }
 
-        let receiver = self.iroh_blobs.read_file(*hash).await.unwrap();
+        let receiver = self.iroh_blobs.read_file(*hash).await?;
 
         Ok(receiver)
     }
