@@ -689,11 +689,19 @@ pub fn record_key_from_query(url: &Url, key: &str) -> Result<RecordKey> {
     Ok(RecordKey::new(CRYPTO_KIND_VLD0, bare))
 }
 
-pub fn public_key_from_query(url: &Url, key: &str) -> Result<PublicKey> {
+/// Hex-decode an attacker-controlled join-URL query value into exactly 32 bytes,
+/// returning an error on bad hex or wrong length.
+fn key_bytes_from_query(url: &Url, key: &str) -> Result<[u8; 32]> {
     let value = find_query(url, key)?;
     let bytes = hex::decode(value)?;
-    let mut key_vec: [u8; 32] = [0; 32];
-    key_vec.copy_from_slice(bytes.as_slice());
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow!("Expected 32-byte key for {key}, got {} bytes", bytes.len()))
+}
+
+pub fn public_key_from_query(url: &Url, key: &str) -> Result<PublicKey> {
+    let key_vec = key_bytes_from_query(url, key)?;
     Ok(PublicKey::new(
         CRYPTO_KIND_VLD0,
         veilid_core::BarePublicKey::from(&key_vec[..]),
@@ -701,10 +709,7 @@ pub fn public_key_from_query(url: &Url, key: &str) -> Result<PublicKey> {
 }
 
 pub fn secret_key_from_query(url: &Url, key: &str) -> Result<SecretKey> {
-    let value = find_query(url, key)?;
-    let bytes = hex::decode(value)?;
-    let mut key_vec: [u8; 32] = [0; 32];
-    key_vec.copy_from_slice(bytes.as_slice());
+    let key_vec = key_bytes_from_query(url, key)?;
     Ok(SecretKey::new(
         CRYPTO_KIND_VLD0,
         veilid_core::BareSecretKey::from(&key_vec[..]),
@@ -712,10 +717,7 @@ pub fn secret_key_from_query(url: &Url, key: &str) -> Result<SecretKey> {
 }
 
 pub fn shared_secret_from_query(url: &Url, key: &str) -> Result<SharedSecret> {
-    let value = find_query(url, key)?;
-    let bytes = hex::decode(value)?;
-    let mut key_vec: [u8; 32] = [0; 32];
-    key_vec.copy_from_slice(bytes.as_slice());
+    let key_vec = key_bytes_from_query(url, key)?;
     Ok(SharedSecret::new(
         CRYPTO_KIND_VLD0,
         veilid_core::BareSharedSecret::from(&key_vec[..]),
