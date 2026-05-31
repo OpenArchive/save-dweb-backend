@@ -13,13 +13,13 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tracing::{error, info, warn};
 
 use std::path::PathBuf;
 use std::result;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 use url::Url;
 use veilid_core::{
     DHTRecordDescriptor, DHTReportScope, DHTSchema, KeyPair, ProtectedStore, PublicKey, RecordKey,
@@ -113,6 +113,13 @@ fn repo_record_key_from_dht_bytes(data: &[u8]) -> Result<RecordKey> {
     ))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum RepoWatchUpdate {
+    Ignore,
+    Changed,
+    WatchEnded,
+}
+
 #[derive(Clone)]
 pub struct Group {
     pub dht_record: DHTRecordDescriptor,
@@ -121,6 +128,7 @@ pub struct Group {
     pub repos: Arc<Mutex<HashMap<String, Repo>>>,
     pub veilid: VeilidAPI,
     pub iroh_blobs: VeilidIrohBlobs,
+    update_rx: Arc<Mutex<broadcast::Receiver<VeilidUpdate>>>,
 }
 
 impl Group {
@@ -130,6 +138,7 @@ impl Group {
         routing_context: RoutingContext,
         veilid: VeilidAPI,
         iroh_blobs: VeilidIrohBlobs,
+        update_rx: broadcast::Receiver<VeilidUpdate>,
     ) -> Self {
         Self {
             dht_record,
@@ -138,6 +147,7 @@ impl Group {
             repos: Arc::new(Mutex::new(HashMap::new())),
             veilid,
             iroh_blobs,
+            update_rx: Arc::new(Mutex::new(update_rx)),
         }
     }
 
@@ -768,50 +778,162 @@ impl Group {
             .map_err(|_| anyhow!("Failed to load keypair for repo_id: {repo_id:?}"))
     }
 
+    fn repo_watch_subkeys() -> ValueSubkeyRangeSet {
+        let (start, end) = repo_watch_subkey_bounds();
+        ValueSubkeyRangeSet::single_range(start, end)
+    }
+
+    async fn register_repo_watch(
+        routing_context: &RoutingContext,
+        dht_record_key: &RecordKey,
+        repo_subkeys: &ValueSubkeyRangeSet,
+    ) -> Result<()> {
+        let active = routing_context
+            .watch_dht_values(
+                dht_record_key.clone(),
+                Some(repo_subkeys.clone()),
+                None,
+                None,
+            )
+            .await?;
+
+        if active {
+            info!("DHT watch active on group repo list {dht_record_key:?}");
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "DHT watch registration returned inactive for group repo list {dht_record_key:?}"
+            ))
+        }
+    }
+
+    fn classify_repo_watch_update(
+        value_change: &veilid_core::VeilidValueChange,
+        dht_record_key: &RecordKey,
+        repo_subkeys: &ValueSubkeyRangeSet,
+    ) -> RepoWatchUpdate {
+        if value_change.key != *dht_record_key {
+            return RepoWatchUpdate::Ignore;
+        }
+
+        if value_change.count == 0 || value_change.subkeys.is_empty() {
+            return RepoWatchUpdate::WatchEnded;
+        }
+
+        let changed_repo_subkeys = value_change.subkeys.intersect(repo_subkeys);
+        if changed_repo_subkeys.is_empty() {
+            RepoWatchUpdate::Ignore
+        } else {
+            RepoWatchUpdate::Changed
+        }
+    }
+
     pub async fn watch_changes<F, Fut>(&self, on_change: F) -> Result<()>
     where
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
-        let (start, end) = repo_watch_subkey_bounds();
-        let range = ValueSubkeyRangeSet::single_range(start, end);
-
-        // Clone necessary data for the async block
         let routing_context = self.routing_context.clone();
         let dht_record_key = self.dht_record.key().clone();
+        let repo_subkeys = Self::repo_watch_subkeys();
+        let update_rx = self.update_rx.lock().await.resubscribe();
+        Self::register_repo_watch(&routing_context, &dht_record_key, &repo_subkeys).await?;
 
-        // Spawn a task that uses only owned data
-        tokio::spawn(async move {
-            match routing_context
-                .watch_dht_values(dht_record_key.clone(), Some(range.clone()), None, None)
-                .await
-            {
-                Ok(_) => {
-                    info!("DHT watch successfully set on record key {dht_record_key:?}");
+        let register_watch = {
+            let routing_context = routing_context.clone();
+            let dht_record_key = dht_record_key.clone();
+            let repo_subkeys = repo_subkeys.clone();
+            move || {
+                let routing_context = routing_context.clone();
+                let dht_record_key = dht_record_key.clone();
+                let repo_subkeys = repo_subkeys.clone();
+                async move {
+                    Self::register_repo_watch(&routing_context, &dht_record_key, &repo_subkeys)
+                        .await
+                }
+            }
+        };
 
-                    loop {
-                        if let Ok(change) = routing_context
-                            .watch_dht_values(
-                                dht_record_key.clone(),
-                                Some(range.clone()),
-                                None,
-                                None,
-                            )
-                            .await
-                        {
-                            if change {
-                                if let Err(e) = on_change().await {
-                                    error!("Failed to re-download files: {e:?}");
+        tokio::spawn(Self::watch_repo_update_loop(
+            update_rx,
+            dht_record_key,
+            repo_subkeys,
+            on_change,
+            register_watch,
+        ));
+
+        Ok(())
+    }
+
+    async fn watch_repo_update_loop<F, Fut, R, RFut>(
+        mut update_rx: broadcast::Receiver<VeilidUpdate>,
+        dht_record_key: RecordKey,
+        repo_subkeys: ValueSubkeyRangeSet,
+        on_change: F,
+        register_watch: R,
+    ) where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+        R: Fn() -> RFut + Send + Sync + 'static,
+        RFut: Future<Output = Result<()>> + Send + 'static,
+    {
+        loop {
+            match update_rx.recv().await {
+                Ok(VeilidUpdate::ValueChange(value_change)) => {
+                    match Self::classify_repo_watch_update(
+                        &value_change,
+                        &dht_record_key,
+                        &repo_subkeys,
+                    ) {
+                        RepoWatchUpdate::Ignore => continue,
+                        RepoWatchUpdate::WatchEnded => {
+                            warn!(
+                                "DHT watch ended for group repo list {dht_record_key:?}; re-registering"
+                            );
+                            let mut retry_delay = Duration::from_secs(1);
+                            loop {
+                                match register_watch().await {
+                                    Ok(()) => {
+                                        if let Err(e) = on_change().await {
+                                            error!(
+                                                "Failed to reconcile group DHT after watch re-registration: {e:?}"
+                                            );
+                                        }
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to re-register DHT watch for group repo list {dht_record_key:?}: {e:?}"
+                                        );
+                                        tokio::time::sleep(retry_delay).await;
+                                        retry_delay = std::cmp::min(
+                                            retry_delay.saturating_mul(2),
+                                            Duration::from_secs(60),
+                                        );
+                                    }
                                 }
+                            }
+                        }
+                        RepoWatchUpdate::Changed => {
+                            if let Err(e) = on_change().await {
+                                error!("Failed to handle group DHT change: {e:?}");
                             }
                         }
                     }
                 }
-                Err(e) => error!("Failed to set DHT watch: {e:?}"),
+                Ok(_) => {}
+                Err(broadcast::error::RecvError::Lagged(count)) => {
+                    warn!("Missed {count} Veilid updates while watching group repo list");
+                    if let Err(e) = on_change().await {
+                        error!("Failed to handle lagged group DHT updates: {e:?}");
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    warn!("Veilid update channel closed while watching group repo list");
+                    break;
+                }
             }
-        });
-
-        Ok(())
+        }
     }
 }
 
@@ -844,8 +966,14 @@ impl DHTEntity for Group {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use tokio::sync::Notify;
+    use tokio::time::{sleep, timeout};
 
-    fn encoded_record_key(byte: u8) -> String {
+    fn test_record_key(byte: u8) -> RecordKey {
         let bytes = [byte; 32];
         RecordKey::new(
             CRYPTO_KIND_VLD0,
@@ -854,8 +982,10 @@ mod tests {
                 None,
             ),
         )
-        .ref_value()
-        .encode()
+    }
+
+    fn encoded_record_key(byte: u8) -> String {
+        test_record_key(byte).ref_value().encode()
     }
 
     #[test]
@@ -947,5 +1077,220 @@ mod tests {
         let err = repo_record_key_from_dht_bytes(&[0xff, 0xfe, 0xfd])
             .expect_err("invalid dht value should fail");
         assert!(err.to_string().contains("valid UTF-8"));
+    }
+
+    #[test]
+    fn repo_watch_subkeys_uses_bounded_repo_slots_without_group_name_slot() {
+        let repo_subkeys = Group::repo_watch_subkeys();
+
+        assert!(!repo_subkeys
+            .intersect(&ValueSubkeyRangeSet::single(1))
+            .is_empty());
+        assert!(!repo_subkeys
+            .intersect(&ValueSubkeyRangeSet::single(MAX_GROUP_REPOS))
+            .is_empty());
+        assert!(repo_subkeys
+            .intersect(&ValueSubkeyRangeSet::single(0))
+            .is_empty());
+        assert!(repo_subkeys
+            .intersect(&ValueSubkeyRangeSet::single(MAX_GROUP_REPOS + 1))
+            .is_empty());
+    }
+
+    fn value_change(
+        key: RecordKey,
+        subkeys: ValueSubkeyRangeSet,
+        count: u32,
+    ) -> veilid_core::VeilidValueChange {
+        veilid_core::VeilidValueChange {
+            key,
+            subkeys,
+            count,
+            value: None,
+        }
+    }
+
+    #[test]
+    fn repo_watch_update_classification_filters_value_changes() {
+        let group_key = test_record_key(1);
+        let other_key = test_record_key(2);
+        let repo_subkeys = Group::repo_watch_subkeys();
+
+        assert_eq!(
+            Group::classify_repo_watch_update(
+                &value_change(other_key, ValueSubkeyRangeSet::single(1), 1),
+                &group_key,
+                &repo_subkeys,
+            ),
+            RepoWatchUpdate::Ignore
+        );
+        assert_eq!(
+            Group::classify_repo_watch_update(
+                &value_change(group_key.clone(), ValueSubkeyRangeSet::single(0), 1),
+                &group_key,
+                &repo_subkeys,
+            ),
+            RepoWatchUpdate::Ignore
+        );
+        assert_eq!(
+            Group::classify_repo_watch_update(
+                &value_change(group_key.clone(), ValueSubkeyRangeSet::single(1), 1),
+                &group_key,
+                &repo_subkeys,
+            ),
+            RepoWatchUpdate::Changed
+        );
+        assert_eq!(
+            Group::classify_repo_watch_update(
+                &value_change(group_key.clone(), ValueSubkeyRangeSet::new(), 1),
+                &group_key,
+                &repo_subkeys,
+            ),
+            RepoWatchUpdate::WatchEnded
+        );
+        assert_eq!(
+            Group::classify_repo_watch_update(
+                &value_change(group_key.clone(), ValueSubkeyRangeSet::single(1), 0),
+                &group_key,
+                &repo_subkeys,
+            ),
+            RepoWatchUpdate::WatchEnded
+        );
+    }
+
+    #[tokio::test]
+    async fn repo_watch_update_loop_invokes_callback_for_matching_value_change() -> Result<()> {
+        let (update_tx, update_rx) = broadcast::channel(8);
+        let group_key = test_record_key(1);
+        let other_key = test_record_key(2);
+        let repo_subkeys = Group::repo_watch_subkeys();
+        let change_count = Arc::new(AtomicUsize::new(0));
+        let change_notify = Arc::new(Notify::new());
+        let callback_count = Arc::clone(&change_count);
+        let callback_notify = Arc::clone(&change_notify);
+
+        let update_loop = tokio::spawn(Group::watch_repo_update_loop(
+            update_rx,
+            group_key.clone(),
+            repo_subkeys,
+            move || {
+                let callback_count = Arc::clone(&callback_count);
+                let callback_notify = Arc::clone(&callback_notify);
+                async move {
+                    callback_count.fetch_add(1, Ordering::SeqCst);
+                    callback_notify.notify_waiters();
+                    Ok(())
+                }
+            },
+            || async { Ok(()) },
+        ));
+
+        update_tx.send(VeilidUpdate::ValueChange(Box::new(value_change(
+            group_key.clone(),
+            ValueSubkeyRangeSet::single(1),
+            1,
+        ))))?;
+
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if change_count.load(Ordering::SeqCst) > 0 {
+                    break;
+                }
+                change_notify.notified().await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("Timed out waiting for watch callback"))?;
+
+        update_tx.send(VeilidUpdate::ValueChange(Box::new(value_change(
+            group_key,
+            ValueSubkeyRangeSet::single(0),
+            1,
+        ))))?;
+        update_tx.send(VeilidUpdate::ValueChange(Box::new(value_change(
+            other_key,
+            ValueSubkeyRangeSet::single(1),
+            1,
+        ))))?;
+        sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(
+            change_count.load(Ordering::SeqCst),
+            1,
+            "only matching group repo subkey updates should invoke the callback"
+        );
+
+        drop(update_tx);
+        timeout(Duration::from_secs(1), update_loop).await??;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repo_watch_update_loop_re_registers_and_reconciles_when_watch_ends() -> Result<()> {
+        let (update_tx, update_rx) = broadcast::channel(8);
+        let group_key = test_record_key(1);
+        let repo_subkeys = Group::repo_watch_subkeys();
+        let change_count = Arc::new(AtomicUsize::new(0));
+        let register_count = Arc::new(AtomicUsize::new(0));
+        let change_notify = Arc::new(Notify::new());
+        let callback_count = Arc::clone(&change_count);
+        let callback_notify = Arc::clone(&change_notify);
+        let callback_register_count = Arc::clone(&register_count);
+
+        let update_loop = tokio::spawn(Group::watch_repo_update_loop(
+            update_rx,
+            group_key.clone(),
+            repo_subkeys,
+            move || {
+                let callback_count = Arc::clone(&callback_count);
+                let callback_notify = Arc::clone(&callback_notify);
+                async move {
+                    callback_count.fetch_add(1, Ordering::SeqCst);
+                    callback_notify.notify_waiters();
+                    Ok(())
+                }
+            },
+            move || {
+                let callback_register_count = Arc::clone(&callback_register_count);
+                async move {
+                    callback_register_count.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            },
+        ));
+
+        update_tx.send(VeilidUpdate::ValueChange(Box::new(value_change(
+            group_key,
+            ValueSubkeyRangeSet::new(),
+            1,
+        ))))?;
+
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if change_count.load(Ordering::SeqCst) > 0 {
+                    break;
+                }
+                change_notify.notified().await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("Timed out waiting for watch reconciliation"))?;
+
+        assert_eq!(
+            register_count.load(Ordering::SeqCst),
+            1,
+            "watch-ended updates should re-register the DHT watch"
+        );
+        assert_eq!(
+            change_count.load(Ordering::SeqCst),
+            1,
+            "watch-ended updates should reconcile once after re-registration"
+        );
+
+        drop(update_tx);
+        timeout(Duration::from_secs(1), update_loop).await??;
+
+        Ok(())
     }
 }

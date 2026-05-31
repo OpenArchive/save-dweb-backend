@@ -398,6 +398,11 @@ impl Backend {
             routing_context,
             veilid.clone(),
             iroh_blobs.clone(),
+            inner
+                .update_rx
+                .as_ref()
+                .ok_or_else(|| anyhow!("Veilid update receiver not initialized"))?
+                .resubscribe(),
         );
 
         // Try to load existing repo from disk
@@ -463,6 +468,11 @@ impl Backend {
             routing_context,
             veilid.clone(),
             iroh_blobs.clone(),
+            inner
+                .update_rx
+                .as_ref()
+                .ok_or_else(|| anyhow!("Veilid update receiver not initialized"))?
+                .resubscribe(),
         );
 
         let protected_store = veilid.protected_store().unwrap();
@@ -543,6 +553,11 @@ impl Backend {
             routing_context,
             veilid.clone(),
             iroh_blobs.clone(),
+            inner
+                .update_rx
+                .as_ref()
+                .ok_or_else(|| anyhow!("Veilid update receiver not initialized"))?
+                .resubscribe(),
         );
 
         group.try_load_repo_from_disk().await;

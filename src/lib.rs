@@ -41,6 +41,7 @@ mod tests {
     use tokio::time::sleep;
     use tokio_stream::wrappers::ReceiverStream;
     use tracing::error;
+    use veilid_core::{AllowOffline, DHTSchema, SetDHTValueOptions, ValueSubkeyRangeSet};
 
     #[tokio::test]
     #[serial]
@@ -137,6 +138,111 @@ mod tests {
 
         // Return the test result
         result?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    #[ignore = "requires live Veilid DHT watch delivery"]
+    async fn live_dht_valuechange_delivered_for_watched_record() -> Result<()> {
+        let base_dir = TmpDir::new("test_live_dht_valuechange").await.unwrap();
+        let base_dir_path = base_dir.to_path_buf();
+
+        let (v1_result, v2_result) = tokio::join!(
+            init_veilid(&base_dir_path, "valuechange_writer".to_string()),
+            init_veilid(&base_dir_path, "valuechange_watcher".to_string())
+        );
+        let (veilid_writer, _writer_updates) = v1_result?;
+        let (veilid_watcher, watcher_updates) = v2_result?;
+
+        let writer_rc = veilid_writer.routing_context()?;
+        let watcher_rc = veilid_watcher.routing_context()?;
+        let crypto = veilid_writer.crypto()?;
+        let crypto_system = crypto
+            .get(CRYPTO_KIND_VLD0)
+            .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
+        let owner_keypair = crypto_system.generate_keypair();
+
+        let dht_record = writer_rc
+            .create_dht_record(
+                CRYPTO_KIND_VLD0,
+                DHTSchema::dflt(2)?,
+                Some(owner_keypair.clone()),
+            )
+            .await?;
+        let record_key = dht_record.key().clone();
+
+        let strict_set = SetDHTValueOptions {
+            writer: None,
+            allow_offline: Some(AllowOffline(false)),
+        };
+
+        writer_rc
+            .set_dht_value(
+                record_key.clone(),
+                1,
+                b"initial".to_vec(),
+                Some(strict_set.clone()),
+            )
+            .await?;
+
+        let _watcher_record = watcher_rc
+            .open_dht_record(record_key.clone(), Some(owner_keypair))
+            .await?;
+        let initial = watcher_rc
+            .get_dht_value(record_key.clone(), 1, true)
+            .await?
+            .ok_or_else(|| anyhow!("Watcher could not read initial DHT value"))?;
+        assert_eq!(initial.data(), b"initial");
+
+        let mut value_changes = watcher_updates.resubscribe();
+        let active = watcher_rc
+            .watch_dht_values(
+                record_key.clone(),
+                Some(ValueSubkeyRangeSet::single(1)),
+                None,
+                None,
+            )
+            .await?;
+        assert!(active, "DHT watch should be active");
+
+        sleep(Duration::from_secs(5)).await;
+
+        writer_rc
+            .set_dht_value(record_key.clone(), 1, b"updated".to_vec(), Some(strict_set))
+            .await?;
+
+        let value_change = tokio::time::timeout(Duration::from_secs(180), async {
+            loop {
+                if let VeilidUpdate::ValueChange(value_change) = value_changes.recv().await? {
+                    println!("Observed ValueChange: {value_change:?}");
+                    if value_change.key == record_key
+                        && !value_change
+                            .subkeys
+                            .intersect(&ValueSubkeyRangeSet::single(1))
+                            .is_empty()
+                    {
+                        break Ok::<_, anyhow::Error>(value_change);
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("Timed out waiting for live Veilid ValueChange"))??;
+
+        assert!(
+            value_change.count > 0,
+            "ValueChange should come from an active watch"
+        );
+        let changed_value = value_change
+            .value
+            .as_ref()
+            .ok_or_else(|| anyhow!("ValueChange should include changed value data"))?;
+        assert_eq!(changed_value.data(), b"updated");
+
+        veilid_watcher.shutdown().await;
+        veilid_writer.shutdown().await;
 
         Ok(())
     }
