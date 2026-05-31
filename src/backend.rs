@@ -695,6 +695,15 @@ fn find_query(url: &Url, key: &str) -> Result<String> {
     Err(anyhow!("Unable to find parameter {key} in URL {url:?}"))
 }
 
+fn fixed_32_byte_hex_from_query(url: &Url, key: &str) -> Result<[u8; 32]> {
+    let value = find_query(url, key)?;
+    let bytes = hex::decode(&value).map_err(|e| anyhow!("Invalid hex for {key}: {e}"))?;
+    let len = bytes.len();
+    bytes.try_into().map_err(|_| {
+        anyhow!("Invalid length for {key}: expected 32 bytes from hex, got {len} bytes")
+    })
+}
+
 /// Decode a record key from a URL query parameter.
 /// Expects the value produced by `RecordKey::ref_value().encode()` (e.g. from `Group::get_url()`).
 /// Round-trip is covered by the `test_join` test.
@@ -705,10 +714,7 @@ pub fn record_key_from_query(url: &Url, key: &str) -> Result<RecordKey> {
 }
 
 pub fn public_key_from_query(url: &Url, key: &str) -> Result<PublicKey> {
-    let value = find_query(url, key)?;
-    let bytes = hex::decode(value)?;
-    let mut key_vec: [u8; 32] = [0; 32];
-    key_vec.copy_from_slice(bytes.as_slice());
+    let key_vec = fixed_32_byte_hex_from_query(url, key)?;
     Ok(PublicKey::new(
         CRYPTO_KIND_VLD0,
         veilid_core::BarePublicKey::from(&key_vec[..]),
@@ -716,10 +722,7 @@ pub fn public_key_from_query(url: &Url, key: &str) -> Result<PublicKey> {
 }
 
 pub fn secret_key_from_query(url: &Url, key: &str) -> Result<SecretKey> {
-    let value = find_query(url, key)?;
-    let bytes = hex::decode(value)?;
-    let mut key_vec: [u8; 32] = [0; 32];
-    key_vec.copy_from_slice(bytes.as_slice());
+    let key_vec = fixed_32_byte_hex_from_query(url, key)?;
     Ok(SecretKey::new(
         CRYPTO_KIND_VLD0,
         veilid_core::BareSecretKey::from(&key_vec[..]),
@@ -727,10 +730,7 @@ pub fn secret_key_from_query(url: &Url, key: &str) -> Result<SecretKey> {
 }
 
 pub fn shared_secret_from_query(url: &Url, key: &str) -> Result<SharedSecret> {
-    let value = find_query(url, key)?;
-    let bytes = hex::decode(value)?;
-    let mut key_vec: [u8; 32] = [0; 32];
-    key_vec.copy_from_slice(bytes.as_slice());
+    let key_vec = fixed_32_byte_hex_from_query(url, key)?;
     Ok(SharedSecret::new(
         CRYPTO_KIND_VLD0,
         veilid_core::BareSharedSecret::from(&key_vec[..]),
@@ -751,4 +751,102 @@ pub fn parse_url(url_string: &str) -> Result<CommonKeypair> {
         secret_key,
         encryption_key,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::{test_helpers::setup_test_backend, DHTEntity};
+    use serial_test::serial;
+
+    fn encoded_record_key(byte: u8) -> String {
+        let bytes = [byte; 32];
+        RecordKey::new(
+            CRYPTO_KIND_VLD0,
+            veilid_core::BareRecordKey::new(
+                veilid_core::BareOpaqueRecordKey::from(&bytes[..]),
+                None,
+            ),
+        )
+        .ref_value()
+        .encode()
+    }
+
+    fn valid_url_with(pk: &str) -> String {
+        let dht = encoded_record_key(1);
+        let enc = "22".repeat(32);
+        let sk = "33".repeat(32);
+        format!("save+dweb::?dht={dht}&enc={enc}&pk={pk}&sk={sk}")
+    }
+
+    fn parse_url_err(url: &str) -> String {
+        match parse_url(url) {
+            Ok(_) => panic!("expected URL parse error"),
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[test]
+    fn parse_url_rejects_malformed_url() {
+        assert!(parse_url("not a url").is_err());
+    }
+
+    #[test]
+    fn parse_url_rejects_missing_query_parameters() {
+        let err = parse_url_err("save+dweb::?");
+        assert!(err.contains("dht"));
+    }
+
+    #[test]
+    fn parse_url_rejects_short_hex_key_without_panicking() {
+        let err = parse_url_err(&valid_url_with("abcd"));
+        assert!(err.contains("pk"));
+        assert!(err.contains("expected 32 bytes"));
+    }
+
+    #[test]
+    fn parse_url_rejects_non_hex_key_without_panicking() {
+        let err = parse_url_err(&valid_url_with("not-hex"));
+        assert!(err.contains("Invalid hex for pk"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn refresh_group_reloads_group_after_cache_invalidation() -> Result<()> {
+        let (backend, _tmpdir) =
+            setup_test_backend("refresh_group_reloads_group_after_cache_invalidation").await?;
+        let group = backend.create_group().await?;
+        let group_id = group.id();
+        group.set_name("Refreshable").await?;
+
+        let refreshed = backend.refresh_group(&group_id).await?;
+
+        assert_eq!(refreshed.id(), group_id);
+        assert_eq!(refreshed.get_name().await?, "Refreshable");
+
+        backend.stop().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn close_group_removes_group_from_cache() -> Result<()> {
+        let (backend, _tmpdir) = setup_test_backend("close_group_removes_group_from_cache").await?;
+        let group = backend.create_group().await?;
+        let group_id = group.id();
+
+        assert_eq!(backend.list_groups().await?.len(), 1);
+
+        backend.close_group(group_id.clone()).await?;
+        assert!(backend.list_groups().await?.is_empty());
+
+        let err = backend
+            .close_group(group_id)
+            .await
+            .expect_err("closing a removed group should fail");
+        assert!(err.to_string().contains("Group not found"));
+
+        backend.stop().await?;
+        Ok(())
+    }
 }

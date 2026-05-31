@@ -727,6 +727,49 @@ mod tests {
         backend.stop().await.expect("Unable to stop");
     }
 
+    #[test]
+    fn key_query_parsers_reject_malformed_input() {
+        use crate::group::{URL_ENCRYPTION_KEY, URL_PUBLIC_KEY, URL_SECRET_KEY};
+        use url::Url;
+
+        // 16 bytes of valid hex — decodes fine but is the wrong length for a 32-byte key.
+        let short = "00".repeat(16);
+        let url = Url::parse(&format!("save+dweb:?{URL_PUBLIC_KEY}={short}")).unwrap();
+        assert!(backend::public_key_from_query(&url, URL_PUBLIC_KEY).is_err());
+        let url = Url::parse(&format!("save+dweb:?{URL_SECRET_KEY}={short}")).unwrap();
+        assert!(backend::secret_key_from_query(&url, URL_SECRET_KEY).is_err());
+        let url = Url::parse(&format!("save+dweb:?{URL_ENCRYPTION_KEY}={short}")).unwrap();
+        assert!(backend::shared_secret_from_query(&url, URL_ENCRYPTION_KEY).is_err());
+
+        // 33 bytes — one byte too long.
+        let long = "00".repeat(33);
+        let url = Url::parse(&format!("save+dweb:?{URL_PUBLIC_KEY}={long}")).unwrap();
+        assert!(backend::public_key_from_query(&url, URL_PUBLIC_KEY).is_err());
+
+        // Not valid hex at all.
+        let url = Url::parse(&format!("save+dweb:?{URL_PUBLIC_KEY}=zzzz")).unwrap();
+        assert!(backend::public_key_from_query(&url, URL_PUBLIC_KEY).is_err());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn decrypt_aead_rejects_short_ciphertext() -> Result<()> {
+        let (backend, _tmpdir) =
+            setup_test_backend("decrypt_aead_rejects_short_ciphertext").await?;
+        let group = backend
+            .create_group()
+            .await
+            .expect("Unable to create group");
+
+        // Fewer than 24 bytes cannot hold a nonce.
+        assert!(group.decrypt_aead(&[0u8; 10], None).is_err());
+        // Exactly the nonce length, but no ciphertext or tag follows.
+        assert!(group.decrypt_aead(&[0u8; 24], None).is_err());
+
+        backend.stop().await.expect("Unable to stop");
+        Ok(())
+    }
+
     #[tokio::test]
     #[serial]
     async fn list_repos_test() -> Result<()> {

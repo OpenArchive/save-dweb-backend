@@ -22,6 +22,65 @@ use veilid_iroh_blobs::iroh::VeilidIrohBlobs;
 
 pub const HASH_SUBKEY: u32 = 1;
 pub const ROUTE_SUBKEY: u32 = 2;
+pub const ENCRYPTED_FILE_MAGIC: &[u8; 4] = b"SAVE";
+const ENCRYPTED_FILE_VERSION: u8 = 0x01;
+const ENCRYPTED_FILE_HEADER_LEN: usize = 4 + 1 + crate::common::AEAD_NONCE_LEN;
+
+enum FileDataEnvelope<'a> {
+    Plaintext(&'a [u8]),
+    Encrypted { nonce: Nonce, ciphertext: &'a [u8] },
+}
+
+fn split_file_data_envelope(data: &[u8]) -> Result<FileDataEnvelope<'_>> {
+    if data.len() < ENCRYPTED_FILE_MAGIC.len() || &data[..4] != ENCRYPTED_FILE_MAGIC {
+        return Ok(FileDataEnvelope::Plaintext(data));
+    }
+
+    if data.len() <= ENCRYPTED_FILE_HEADER_LEN {
+        return Ok(FileDataEnvelope::Plaintext(data));
+    }
+
+    let version = data[4];
+    if version != ENCRYPTED_FILE_VERSION {
+        return Err(anyhow!("Unsupported encryption version: {version}"));
+    }
+
+    let nonce_bytes: [u8; crate::common::AEAD_NONCE_LEN] = data[5..ENCRYPTED_FILE_HEADER_LEN]
+        .try_into()
+        .map_err(|_| anyhow!("Failed to extract nonce"))?;
+    let ciphertext = &data[ENCRYPTED_FILE_HEADER_LEN..];
+    Ok(FileDataEnvelope::Encrypted {
+        nonce: Nonce::new(&nonce_bytes),
+        ciphertext,
+    })
+}
+
+fn hash_from_dht_bytes(data: &[u8]) -> Result<Hash> {
+    let decoded_hash = decode(data).map_err(|e| {
+        anyhow!("Failed to decode hex string from DHT: {e}. Repo hash may be corrupted.")
+    })?;
+
+    if decoded_hash.len() != 32 {
+        return Err(anyhow!(
+            "Invalid hash length: expected 32 bytes, got {} bytes. Repo hash may be corrupted.",
+            decoded_hash.len()
+        ));
+    }
+
+    let hash_raw: [u8; 32] = decoded_hash
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow!("Invalid hash length after validation"))?;
+
+    Ok(Hash::from_bytes(hash_raw))
+}
+
+fn ensure_write_permissions(can_write: bool) -> Result<()> {
+    if !can_write {
+        return Err(anyhow::Error::msg("Repo does not have write permissions"));
+    }
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct Repo {
@@ -193,30 +252,7 @@ impl Repo {
             match value {
                 Some(v) => {
                     // Successfully got value, decode and return
-                    let data = v.data();
-
-                    // Decode the hex string (64 bytes) into a 32-byte hash
-                    let decoded_hash = match decode(data) {
-                        Ok(h) => h,
-                        Err(e) => {
-                            return Err(anyhow!(
-                                "Failed to decode hex string from DHT: {e}. Repo hash may be corrupted."
-                            ));
-                        }
-                    };
-
-                    // Ensure the decoded hash is 32 bytes
-                    if decoded_hash.len() != 32 {
-                        return Err(anyhow!(
-                            "Invalid hash length: expected 32 bytes, got {} bytes. Repo hash may be corrupted.",
-                            decoded_hash.len()
-                        ));
-                    }
-                    let mut hash_raw: [u8; 32] = [0; 32];
-                    hash_raw.copy_from_slice(&decoded_hash);
-
-                    // Now create the Hash object
-                    let hash = Hash::from_bytes(hash_raw);
+                    let hash = hash_from_dht_bytes(v.data())?;
 
                     info!("Successfully retrieved hash from DHT: {}", hash.to_hex());
                     return Ok(hash);
@@ -250,6 +286,10 @@ impl Repo {
         self.update_hash_on_dht(&collection_hash).await
     }
 
+    /// Upload a raw Iroh blob and publish its hash to DHT.
+    ///
+    /// This intentionally stores the file bytes as-is. Use [`Repo::upload`] for
+    /// encrypted, named files that are tracked in the repo collection.
     pub async fn upload_blob(&self, file_path: PathBuf) -> Result<Hash> {
         if !self.can_write() {
             return Err(anyhow!("Cannot upload blob, repo is not writable"));
@@ -424,9 +464,6 @@ impl Repo {
     /// Encrypt file data with group's encryption key
     /// Format: [MAGIC(4)] [VERSION(1)] [NONCE(24)] [ENCRYPTED_DATA]
     fn encrypt_file_data(&self, data: &[u8]) -> Result<Vec<u8>> {
-        const MAGIC: &[u8; 4] = b"SAVE"; // Magic bytes to identify encrypted files
-        const VERSION: u8 = 0x01; // Encryption version
-
         let veilid = self.get_veilid_api();
         let crypto = veilid.crypto()?;
         let crypto_system = crypto
@@ -440,8 +477,8 @@ impl Repo {
 
         // Build encrypted file: MAGIC + VERSION + NONCE + ENCRYPTED_DATA
         let mut buffer = Vec::with_capacity(4 + 1 + nonce.bytes().len() + encrypted_chunk.len());
-        buffer.extend_from_slice(MAGIC);
-        buffer.push(VERSION);
+        buffer.extend_from_slice(ENCRYPTED_FILE_MAGIC);
+        buffer.push(ENCRYPTED_FILE_VERSION);
         buffer.extend_from_slice(&nonce.bytes());
         buffer.extend_from_slice(&encrypted_chunk);
 
@@ -451,39 +488,30 @@ impl Repo {
     /// Decrypt file data, auto-detecting encrypted vs plaintext
     /// Returns (decrypted_data, was_encrypted)
     pub fn decrypt_file_data(&self, data: &[u8]) -> Result<(Vec<u8>, bool)> {
-        const MAGIC: &[u8; 4] = b"SAVE";
-
-        // Check if file is encrypted (has magic bytes)
-        if data.len() > 29 && &data[0..4] == MAGIC {
-            let version = data[4];
-            if version != 0x01 {
-                return Err(anyhow!("Unsupported encryption version: {version}"));
+        match split_file_data_envelope(data)? {
+            FileDataEnvelope::Plaintext(plaintext) => {
+                // File is not encrypted (legacy/migration case)
+                warn!("File not encrypted, returning plaintext data");
+                Ok((plaintext.to_vec(), false))
             }
+            FileDataEnvelope::Encrypted { nonce, ciphertext } => {
+                let veilid = self.get_veilid_api();
+                let crypto = veilid.crypto()?;
+                let crypto_system = crypto
+                    .get(CRYPTO_KIND_VLD0)
+                    .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
 
-            let nonce_bytes: [u8; 24] = data[5..29]
-                .try_into()
-                .map_err(|_| anyhow!("Failed to extract nonce"))?;
-            let nonce = Nonce::new(&nonce_bytes);
-            let encrypted_data = &data[29..];
+                let decrypted = crypto_system
+                    .decrypt_aead(ciphertext, &nonce, &self.get_encryption_key(), None)
+                    .map_err(|e| anyhow!("Failed to decrypt file data: {e}"))?;
 
-            let veilid = self.get_veilid_api();
-            let crypto = veilid.crypto()?;
-            let crypto_system = crypto
-                .get(CRYPTO_KIND_VLD0)
-                .ok_or_else(|| anyhow!("Unable to init crypto system"))?;
-
-            let decrypted = crypto_system
-                .decrypt_aead(encrypted_data, &nonce, &self.get_encryption_key(), None)
-                .map_err(|e| anyhow!("Failed to decrypt file data: {e}"))?;
-
-            Ok((decrypted, true))
-        } else {
-            // File is not encrypted (legacy/migration case)
-            warn!("File not encrypted, returning plaintext data");
-            Ok((data.to_vec(), false))
+                Ok((decrypted, true))
+            }
         }
     }
 
+    /// Upload a named file to the repo collection after wrapping it in the
+    /// group encryption envelope (`SAVE` magic, version, nonce, ciphertext).
     pub async fn upload(&self, file_name: &str, data_to_upload: Vec<u8>) -> Result<Hash> {
         self.check_write_permissions()?;
 
@@ -548,10 +576,7 @@ impl Repo {
 
     // Helper method to check if the repo can write
     fn check_write_permissions(&self) -> Result<()> {
-        if !self.can_write() {
-            return Err(anyhow::Error::msg("Repo does not have write permissions"));
-        }
-        Ok(())
+        ensure_write_permissions(self.can_write())
     }
 }
 
@@ -578,5 +603,90 @@ impl DHTEntity for Repo {
 
     fn get_secret_key(&self) -> Option<SecretKey> {
         self.secret_key.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn envelope_err(data: &[u8]) -> String {
+        match split_file_data_envelope(data) {
+            Ok(_) => panic!("expected envelope error"),
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[test]
+    fn hash_from_dht_bytes_rejects_non_hex() {
+        let err = hash_from_dht_bytes(b"not hex").expect_err("non-hex hash should fail");
+        assert!(err.to_string().contains("Failed to decode hex string"));
+    }
+
+    #[test]
+    fn hash_from_dht_bytes_rejects_short_hash() {
+        let err = hash_from_dht_bytes(b"abcd").expect_err("short hash should fail");
+        assert!(err.to_string().contains("expected 32 bytes"));
+    }
+
+    #[test]
+    fn hash_from_dht_bytes_accepts_32_byte_hash_hex() {
+        let hex_hash = "11".repeat(32);
+        let hash = hash_from_dht_bytes(hex_hash.as_bytes()).expect("valid hash should parse");
+        assert_eq!(hash.as_bytes(), &[0x11; 32]);
+    }
+
+    #[test]
+    fn encrypted_file_envelope_accepts_short_save_prefixed_plaintext() {
+        match split_file_data_envelope(b"SAVE\x01short").expect("short legacy file should parse") {
+            FileDataEnvelope::Plaintext(data) => assert_eq!(data, b"SAVE\x01short"),
+            FileDataEnvelope::Encrypted { .. } => {
+                panic!("short SAVE-prefixed data must remain plaintext")
+            }
+        }
+    }
+
+    #[test]
+    fn encrypted_file_envelope_accepts_header_only_plaintext() {
+        let mut payload = Vec::from(&ENCRYPTED_FILE_MAGIC[..]);
+        payload.push(ENCRYPTED_FILE_VERSION);
+        payload.extend_from_slice(&[0u8; crate::common::AEAD_NONCE_LEN]);
+
+        match split_file_data_envelope(&payload).expect("header-only legacy file should parse") {
+            FileDataEnvelope::Plaintext(data) => assert_eq!(data, payload.as_slice()),
+            FileDataEnvelope::Encrypted { .. } => {
+                panic!("header-only SAVE-prefixed data must remain plaintext")
+            }
+        }
+    }
+
+    #[test]
+    fn encrypted_file_envelope_rejects_unsupported_version_with_ciphertext() {
+        let mut payload = Vec::from(&ENCRYPTED_FILE_MAGIC[..]);
+        payload.push(0x02);
+        payload.extend_from_slice(&[0u8; crate::common::AEAD_NONCE_LEN]);
+        payload.push(1);
+
+        let err = envelope_err(&payload);
+        assert!(err.contains("Unsupported encryption version"));
+    }
+
+    #[test]
+    fn encrypted_file_envelope_accepts_legacy_plaintext() {
+        match split_file_data_envelope(b"legacy plaintext").expect("plaintext should parse") {
+            FileDataEnvelope::Plaintext(data) => assert_eq!(data, b"legacy plaintext"),
+            FileDataEnvelope::Encrypted { .. } => panic!("plaintext must not be encrypted"),
+        }
+    }
+
+    #[test]
+    fn write_permission_guard_rejects_read_only_repo() {
+        let err = ensure_write_permissions(false).expect_err("read-only repo should fail");
+        assert!(err.to_string().contains("write permissions"));
+    }
+
+    #[test]
+    fn write_permission_guard_accepts_writable_repo() {
+        ensure_write_permissions(true).expect("writable repo should pass");
     }
 }
