@@ -337,7 +337,7 @@ impl Group {
             self.download_hash_from_peers(hash).await?
         }
 
-        let receiver = self.iroh_blobs.read_file(*hash).await.unwrap();
+        let receiver = self.iroh_blobs.read_file(*hash).await?;
 
         Ok(receiver)
     }
@@ -708,7 +708,9 @@ impl Group {
         let repo = Repo::new(
             repo_dht_record.clone(),
             encryption_key.clone(),
-            self.get_secret_key(),
+            // The repo is its own DHT record with its own keypair; its owner secret is
+            // the write credential for that record.
+            repo_dht_record.owner_secret().clone(),
             self.routing_context.clone(),
             self.veilid.clone(),
             self.iroh_blobs.clone(),
