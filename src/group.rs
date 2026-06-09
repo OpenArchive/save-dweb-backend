@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use std::path::PathBuf;
@@ -219,6 +219,14 @@ impl Group {
     }
 
     pub async fn download_hash_from_peers(&self, hash: &Hash) -> Result<()> {
+        self.download_hash_from_peers_with_timeout(hash, None).await
+    }
+
+    pub async fn download_hash_from_peers_with_timeout(
+        &self,
+        hash: &Hash,
+        overall_timeout: Option<Duration>,
+    ) -> Result<()> {
         // Ask peers to download in random order
         let mut repos = self.list_peer_repos().await;
         repos.shuffle(&mut thread_rng());
@@ -235,9 +243,29 @@ impl Group {
         const INITIAL_DELAY_MS: u64 = 500;
         const MAX_DELAY_MS: u64 = 4000;
         const PER_PEER_TIMEOUT_SECS: u64 = 10;
+        let per_peer_timeout = Duration::from_secs(PER_PEER_TIMEOUT_SECS);
+        let started = Instant::now();
+        let overall_timeout_ms = overall_timeout.map(|timeout| timeout.as_millis());
+        let remaining_budget = || {
+            overall_timeout
+                .map(|timeout| timeout.checked_sub(started.elapsed()).unwrap_or_default())
+        };
+        let timeout_exhausted_error = || {
+            anyhow!(
+                "Unable to download hash {} from any peer within {}ms overall timeout",
+                hash.to_hex(),
+                overall_timeout_ms.unwrap_or_default()
+            )
+        };
 
         for attempt in 0..MAX_RETRIES {
             for repo in repos.iter() {
+                let timeout_budget = match remaining_budget() {
+                    Some(remaining) if remaining.is_zero() => return Err(timeout_exhausted_error()),
+                    Some(remaining) => std::cmp::min(per_peer_timeout, remaining),
+                    None => per_peer_timeout,
+                };
+
                 info!(
                     "Attempt {}: Trying to download hash {} from peer {}",
                     attempt + 1,
@@ -245,45 +273,40 @@ impl Group {
                     hex::encode(repo.id().opaque().ref_value())
                 );
 
-                if let Ok(route_id_blob) = repo.get_route_id_blob().await {
-                    // It's faster to try and fail, than to ask then try
-                    // Guard against hung downloads so a single peer doesn't stall the whole request.
-                    let result = tokio::time::timeout(
-                        tokio::time::Duration::from_secs(PER_PEER_TIMEOUT_SECS),
-                        self.iroh_blobs.download_file_from(route_id_blob, hash),
-                    )
-                    .await;
+                // It's faster to try and fail, than to ask then try. Keep route lookup inside the
+                // timeout too so one peer cannot stall the whole request before downloading starts.
+                let result = tokio::time::timeout(timeout_budget, async {
+                    let route_id_blob = repo.get_route_id_blob().await?;
+                    self.iroh_blobs
+                        .download_file_from(route_id_blob, hash)
+                        .await
+                })
+                .await;
 
-                    match result {
-                        Ok(Ok(())) => {
-                            info!(
-                                "Successfully downloaded hash {} from peer {}",
-                                hash.to_hex(),
-                                hex::encode(repo.id().opaque().ref_value())
-                            );
-                            return Ok(());
-                        }
-                        Ok(Err(e)) => {
-                            warn!(
-                                "Unable to download from peer {}: {}",
-                                hex::encode(repo.id().opaque().ref_value()),
-                                e
-                            );
-                        }
-                        Err(_) => {
-                            warn!(
-                                "Timed out downloading hash {} from peer {} after {}s",
-                                hash.to_hex(),
-                                hex::encode(repo.id().opaque().ref_value()),
-                                PER_PEER_TIMEOUT_SECS
-                            );
-                        }
+                match result {
+                    Ok(Ok(())) => {
+                        info!(
+                            "Successfully downloaded hash {} from peer {}",
+                            hash.to_hex(),
+                            hex::encode(repo.id().opaque().ref_value())
+                        );
+                        return Ok(());
                     }
-                } else {
-                    warn!(
-                        "Unable to get route ID blob for peer {}",
-                        hex::encode(repo.id().opaque().ref_value())
-                    );
+                    Ok(Err(e)) => {
+                        warn!(
+                            "Unable to download from peer {}: {}",
+                            hex::encode(repo.id().opaque().ref_value()),
+                            e
+                        );
+                    }
+                    Err(_) => {
+                        warn!(
+                            "Timed out downloading hash {} from peer {} after {}ms",
+                            hash.to_hex(),
+                            hex::encode(repo.id().opaque().ref_value()),
+                            timeout_budget.as_millis()
+                        );
+                    }
                 }
             }
 
@@ -300,7 +323,15 @@ impl Group {
                     attempt + 2,
                     MAX_RETRIES
                 );
-                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                let delay = Duration::from_millis(delay_ms);
+                if let Some(remaining) = remaining_budget() {
+                    if remaining.is_zero() {
+                        return Err(timeout_exhausted_error());
+                    }
+                    tokio::time::sleep(std::cmp::min(delay, remaining)).await;
+                } else {
+                    tokio::time::sleep(delay).await;
+                }
 
                 // Refresh peer list in case new peers joined
                 let mut refreshed_repos = self.list_peer_repos().await;

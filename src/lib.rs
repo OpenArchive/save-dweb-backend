@@ -906,7 +906,11 @@ mod tests {
         // Download hash from peers
         let mut retries = 10;
         while retries > 0 {
-            if group2.download_hash_from_peers(&file_hash).await.is_ok() {
+            if group2
+                .download_hash_from_peers_with_timeout(&file_hash, Some(Duration::from_secs(55)))
+                .await
+                .is_ok()
+            {
                 tracing::info!("Download success!");
                 break;
             }
