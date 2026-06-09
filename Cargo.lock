@@ -5378,7 +5378,7 @@ dependencies = [
 
 [[package]]
 name = "save-dweb-backend"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -7008,14 +7008,15 @@ dependencies = [
 
 [[package]]
 name = "veilid-iroh-blobs"
-version = "0.3.4"
-source = "git+https://github.com/RangerMauve/veilid-iroh-blobs?tag=v0.3.4#62c64886942f78ef0855fa97c529c240e809eca2"
+version = "0.3.5"
+source = "git+https://github.com/RangerMauve/veilid-iroh-blobs?tag=v0.3.5#79c00a342691f12d01af426c271b93bfa9f1cf64"
 dependencies = [
  "anyhow",
  "bytes",
  "futures-lite",
  "futures-util",
  "hex",
+ "hickory-resolver",
  "iroh-blobs",
  "iroh-io",
  "serde",
