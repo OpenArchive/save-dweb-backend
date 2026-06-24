@@ -4,7 +4,7 @@
 
 ##  1.0 Introduction
 
-OpenArchive’s *Save *application offers several storage options for archiving media via a mobile device. This documentation outlines the technical details for the DWeb Backend (working title *Raven*), a peer-to-peer (P2P), decentralized backend that ensures secure and efficient data management. 
+OpenArchive’s *Save *application offers several storage options for archiving media via a mobile device. This documentation outlines the technical details for the DWeb Backend (working title *DWeb Storage*), a peer-to-peer (P2P), decentralized backend that ensures secure and efficient data management. 
 
 
 ## 1.1 Overview
@@ -31,7 +31,7 @@ The *Save* DWeb Backend relies on two P2P protocols, [Veilid](https://veilid.com
 ## 1.3 Complementary resources 
 
 
-
+* [Privacy-First Archiving: Implementing Secure, Decentralized Storage to Protect Mobile Media](https://www.open-archive.org/pdf/Mobile_DWeb_Archiving.pdf) for the white paper.
 * [Save DWeb Backend Privacy Overview and Risk Assessment](https://hackmd.io/@s74XZjUBQDuPPS04AgPvow/HkacodHgyx)
 * [Veilid’s Rust Documentation](https://docs.rs/veilid-core/latest/veilid_core/) for the Veilid-core library
 * [Iroh’s Rust Documentation](https://docs.rs/iroh/latest/iroh/) for the Iroh library
