@@ -2863,7 +2863,7 @@ dependencies = [
 [[package]]
 name = "iroh"
 version = "0.24.0"
-source = "git+https://github.com/tripledoublev/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
+source = "git+https://github.com/OpenArchive/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
@@ -2907,7 +2907,7 @@ dependencies = [
 [[package]]
 name = "iroh-base"
 version = "0.24.0"
-source = "git+https://github.com/tripledoublev/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
+source = "git+https://github.com/OpenArchive/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
 dependencies = [
  "aead 0.5.2",
  "anyhow",
@@ -2948,7 +2948,7 @@ dependencies = [
 [[package]]
 name = "iroh-blobs"
 version = "0.24.0"
-source = "git+https://github.com/tripledoublev/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
+source = "git+https://github.com/OpenArchive/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
@@ -2990,7 +2990,7 @@ dependencies = [
 [[package]]
 name = "iroh-docs"
 version = "0.24.0"
-source = "git+https://github.com/tripledoublev/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
+source = "git+https://github.com/OpenArchive/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
@@ -3028,7 +3028,7 @@ dependencies = [
 [[package]]
 name = "iroh-gossip"
 version = "0.24.0"
-source = "git+https://github.com/tripledoublev/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
+source = "git+https://github.com/OpenArchive/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
@@ -3068,7 +3068,7 @@ dependencies = [
 [[package]]
 name = "iroh-metrics"
 version = "0.24.0"
-source = "git+https://github.com/tripledoublev/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
+source = "git+https://github.com/OpenArchive/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
 dependencies = [
  "anyhow",
  "erased_set",
@@ -3088,7 +3088,7 @@ dependencies = [
 [[package]]
 name = "iroh-net"
 version = "0.24.0"
-source = "git+https://github.com/tripledoublev/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
+source = "git+https://github.com/OpenArchive/iroh.git?rev=b3f52f6d8bba462eebd7e3991946d844c9a75039#b3f52f6d8bba462eebd7e3991946d844c9a75039"
 dependencies = [
  "anyhow",
  "backoff",
@@ -5441,7 +5441,7 @@ dependencies = [
 
 [[package]]
 name = "save-dweb-backend"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -7044,7 +7044,7 @@ dependencies = [
 [[package]]
 name = "veilid-iroh-blobs"
 version = "0.3.7"
-source = "git+https://github.com/RangerMauve/veilid-iroh-blobs?tag=v0.3.7#6e3ae5b31c7d5f47762b2404ba5a5ef4ec3730c9"
+source = "git+https://github.com/OpenArchive/veilid-iroh-blobs?tag=v0.3.8#f42bb8254052ae530f387c532209bdcb947f62ce"
 dependencies = [
  "anyhow",
  "bytes",

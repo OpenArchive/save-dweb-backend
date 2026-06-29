@@ -1,6 +1,6 @@
 [package]
 name = "save-dweb-backend"
-version = "0.3.11"
+version = "0.3.12"
 edition = "2021"
 
 [features]
@@ -24,7 +24,7 @@ hickory-resolver = "=0.25.2"
 veilid-core = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.5" }
 veilid-tools = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.5" }
 # Matches Veilid 0.5.5.
-veilid-iroh-blobs = { git = "https://github.com/RangerMauve/veilid-iroh-blobs", tag = "v0.3.7" }
+veilid-iroh-blobs = { git = "https://github.com/OpenArchive/veilid-iroh-blobs", tag = "v0.3.8" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 xdg = "2.4"
@@ -49,10 +49,10 @@ base64 = "0.22.1"
 # Patch iroh crates to relax hickory-resolver pin for veilid-core 0.5.5 compat.
 # All iroh workspace crates must come from the same source to avoid duplicate type errors.
 [patch.crates-io]
-iroh = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
-iroh-net = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
-iroh-base = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
-iroh-metrics = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
-iroh-blobs = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
-iroh-docs = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
-iroh-gossip = { git = "https://github.com/tripledoublev/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh = { git = "https://github.com/OpenArchive/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh-net = { git = "https://github.com/OpenArchive/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh-base = { git = "https://github.com/OpenArchive/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh-metrics = { git = "https://github.com/OpenArchive/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh-blobs = { git = "https://github.com/OpenArchive/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh-docs = { git = "https://github.com/OpenArchive/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
+iroh-gossip = { git = "https://github.com/OpenArchive/iroh.git", rev = "b3f52f6d8bba462eebd7e3991946d844c9a75039" }
