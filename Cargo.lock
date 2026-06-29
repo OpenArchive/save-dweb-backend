@@ -387,12 +387,10 @@ dependencies = [
  "blanket",
  "futures-core",
  "futures-task",
- "futures-timer",
  "futures-util",
  "pin-project",
  "rustc_version",
  "tokio",
- "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -1953,10 +1951,6 @@ name = "futures-timer"
 version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f288b0a4f20f9a56b5d1da57e2227c661b7b16168e2f72365f57b63326e29b24"
-dependencies = [
- "gloo-timers",
- "send_wrapper 0.4.0",
-]
 
 [[package]]
 name = "futures-util"
@@ -2132,18 +2126,6 @@ checksum = "8c6a94fa8cd88bea0babf8a27fe9abbcdece831fd1c3c84dd5c231fab4685ec7"
 dependencies = [
  "wasm-bindgen",
  "web-sys",
-]
-
-[[package]]
-name = "gloo-timers"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b995a66bb87bebce9a0f4a95aed01daca4872c050bfcb21653361c03bc35e5c"
-dependencies = [
- "futures-channel",
- "futures-core",
- "js-sys",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2598,7 +2580,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.58.0",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -3390,7 +3372,7 @@ dependencies = [
  "keyvaluedb",
  "keyvaluedb-memorydb",
  "log",
- "send_wrapper 0.6.0",
+ "send_wrapper",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -5459,7 +5441,7 @@ dependencies = [
 
 [[package]]
 name = "save-dweb-backend"
-version = "0.3.9"
+version = "0.3.11"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5634,12 +5616,6 @@ name = "semver"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
-
-[[package]]
-name = "send_wrapper"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f638d531eccd6e23b980caf34876660d38e265409d8e99b397ab71eb3612fad0"
 
 [[package]]
 name = "send_wrapper"
@@ -6368,7 +6344,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0136791f7c95b1f6dd99f9cc786b91bb81c3800b639b3478e561ddb7be95e5f1"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -6970,8 +6946,8 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "veilid-core"
-version = "0.5.4"
-source = "git+https://gitlab.com/veilid/veilid.git?tag=v0.5.4#622909d34a7f322e835b2c647f1da7db01210264"
+version = "0.5.5"
+source = "git+https://gitlab.com/veilid/veilid.git?tag=v0.5.5#bbb212de91b492fb9a55b6d5b9084965c05c17cf"
 dependencies = [
  "arc-swap",
  "argon2",
@@ -7017,7 +6993,7 @@ dependencies = [
  "range-set-blaze 0.5.0",
  "sanitize-filename",
  "schemars 1.2.1",
- "send_wrapper 0.6.0",
+ "send_wrapper",
  "serde",
  "serde-wasm-bindgen",
  "serde_bytes",
@@ -7067,8 +7043,8 @@ dependencies = [
 
 [[package]]
 name = "veilid-iroh-blobs"
-version = "0.3.6"
-source = "git+https://github.com/RangerMauve/veilid-iroh-blobs?tag=v0.3.6#4bebe6b1f24774c8fb62cf3588e4873ab75e7705"
+version = "0.3.7"
+source = "git+https://github.com/RangerMauve/veilid-iroh-blobs?tag=v0.3.7#6e3ae5b31c7d5f47762b2404ba5a5ef4ec3730c9"
 dependencies = [
  "anyhow",
  "bytes",
@@ -7088,8 +7064,8 @@ dependencies = [
 
 [[package]]
 name = "veilid-tools"
-version = "0.5.4"
-source = "git+https://gitlab.com/veilid/veilid.git?tag=v0.5.4#622909d34a7f322e835b2c647f1da7db01210264"
+version = "0.5.5"
+source = "git+https://gitlab.com/veilid/veilid.git?tag=v0.5.5#bbb212de91b492fb9a55b6d5b9084965c05c17cf"
 dependencies = [
  "android_logger",
  "async-io",
@@ -7123,7 +7099,7 @@ dependencies = [
  "range-set-blaze 0.4.4",
  "rayon",
  "rtnetlink 0.20.0",
- "send_wrapper 0.6.0",
+ "send_wrapper",
  "serde",
  "shell-words",
  "socket2 0.6.2",
@@ -7137,7 +7113,6 @@ dependencies = [
  "veilid-hashlink",
  "winapi",
  "windows 0.62.2",
- "ws_stream_wasm",
 ]
 
 [[package]]
@@ -7839,7 +7814,7 @@ dependencies = [
  "log",
  "pharos",
  "rustc_version",
- "send_wrapper 0.6.0",
+ "send_wrapper",
  "thiserror 2.0.18",
  "wasm-bindgen",
  "wasm-bindgen-futures",
