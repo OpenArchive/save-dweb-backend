@@ -1,6 +1,6 @@
 [package]
 name = "save-dweb-backend"
-version = "0.3.11"
+version = "0.3.12"
 edition = "2021"
 
 [features]
@@ -24,7 +24,7 @@ hickory-resolver = "=0.25.2"
 veilid-core = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.5" }
 veilid-tools = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.5.5" }
 # Matches Veilid 0.5.5.
-veilid-iroh-blobs = { git = "https://github.com/OpenArchive/veilid-iroh-blobs", tag = "v0.3.7" }
+veilid-iroh-blobs = { git = "https://github.com/OpenArchive/veilid-iroh-blobs", tag = "v0.3.8" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 xdg = "2.4"
